@@ -32,6 +32,7 @@ class Target:
     yaw: float
     grip: float
     speed: float | None = None  # m per step; None = policy default
+    noise: float = 1.0  # scale of the policy's action noise (0 for precise phases such as insertion)
 
 
 class ScriptedPolicy:
@@ -100,7 +101,8 @@ class ScriptedPolicy:
             self.cmd_pos[i] += delta
             dyaw = np.clip(wrap_angle(target.yaw - self.cmd_yaw[i]), -self.yaw_speed, self.yaw_speed)
             self.cmd_yaw[i] += dyaw
-            pos = self.cmd_pos[i] + (self.rng.normal(0, self.noise, 3) if self.noise > 0 else 0.0)
+            sigma = self.noise * target.noise
+            pos = self.cmd_pos[i] + (self.rng.normal(0, sigma, 3) if sigma > 0 else 0.0)
             quat = quat_mul(yaw_quat(self.cmd_yaw[i]), self.base_quat)
             actions[i] = np.concatenate([pos, quat, [target.grip]])
         return actions

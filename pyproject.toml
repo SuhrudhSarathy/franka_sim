@@ -11,7 +11,7 @@ dependencies = [
     "gymnasium>=1.4.0",
     "h5py>=3.16.0",
     "mujoco>=3.3",
-    "numpy>=2.5.4",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +21,9 @@ warp = [
 video = [
     "imageio>=2.38.1",
     "imageio-ffmpeg>=0.8.1",
+]
+lerobot = [
+    "lerobot[dataset]>=0.7",
 ]
 
 [build-system]

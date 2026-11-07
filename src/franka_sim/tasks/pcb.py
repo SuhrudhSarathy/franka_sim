@@ -24,7 +24,9 @@ class PCBInsertionTask(InsertionTask):
     name = "pcb_insertion"
     obj_prefix = "pcb"
     fixture = "motherboard"
-    xy_tol = 0.0025
+    # Only a card that is inside the connector can get down to the seated height (z_tol); the
+    # horizontal tolerance just allows for the connector's end clearance.
+    xy_tol = 0.006
     z_tol = 0.004
     steps_per_object = 220
     grasp_offset = (0.012,)

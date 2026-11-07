@@ -26,6 +26,10 @@ ENVS = {
     "peg_insertion_all": ("peg_insertion", {"mode": "all"}),
     "buttons": ("buttons", {}),
     "buttons_sequence": ("buttons", {"sequence_length": 3}),
+    "gear_assembly": ("gear_assembly", {}),
+    "kitting": ("kitting", {}),
+    "kitting_all": ("kitting", {"mode": "all"}),
+    "pcb_insertion": ("pcb_insertion", {}),
 }
 
 

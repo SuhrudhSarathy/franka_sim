@@ -8,3 +8,4 @@ data/
 videos/
 *.hdf5
 *.mp4
+lerobot_data/

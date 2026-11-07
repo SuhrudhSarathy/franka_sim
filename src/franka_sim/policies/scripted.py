@@ -162,9 +162,10 @@ class InsertionPolicy(ScriptedPolicy):
                     err[2] = 0.0
                 done = (np.linalg.norm(err[:2]) < 0.0015 and abs(err[2]) < 0.01 and abs(dyaw) < 0.02
                         and self.timer[i] > 5)
-                return Target(ee + err, yaw, CLOSED), done
+                # Precise phases run without demo noise: it can exceed the fixture clearance.
+                return Target(ee + err, yaw, CLOSED, noise=0.0 if np.linalg.norm(err[:2]) < 0.01 else 1.0), done
             err = goal_tip - 0.003 * UP - tip
-            t = Target(ee + err, yaw, CLOSED, speed=self.insert_speed)
+            t = Target(ee + err, yaw, CLOSED, speed=self.insert_speed, noise=0.0)
             return t, (pos[2] - goal[2] < 0.5 * task.z_tol) or self.timer[i] > 60
         if stage == 6:  # release
             return hold, self.timer[i] >= 6
