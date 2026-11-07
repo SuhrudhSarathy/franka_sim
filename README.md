@@ -89,3 +89,78 @@ All assets are made from primitive geoms. The fixtures (nail board, receptacle, 
 mocap bodies, so they can be placed independently in every world on both backends.
 To add your own task, subclass `franka_sim.Task` (`build`, `bind`, `reset`, `observe`, `evaluate`)
 and call `franka_sim.register_task`.
+
+## Scripted demos and recording
+
+Every task has a scripted expert (`franka_sim.policies.make_policy(env)`). These are waypoint
+state machines that emit `ee_pose` actions and close the loop on object poses. For example, the
+hammer policy aims the hammer *face*, not the gripper, at the target nail, and keeps striking until
+the nail is driven in. Each policy keeps its own state per env, so it works with batched envs whose
+episodes start and end at different times.
+
+```sh
+# 40 hammer demos, balanced over the 4 nails (conditioning = target nail), front + wrist cameras
+uv run python scripts/record_demos.py --task hammer_nails --episodes 40 --condition balanced \
+    --cameras front wrist --num-envs 8 --out data/hammer.hdf5
+
+# only episodes that hit the blue nail
+uv run python scripts/record_demos.py --task hammer_nails --episodes 10 --condition target=2
+
+# button sequences, peg insertion of all pegs, the Warp backend
+uv run python scripts/record_demos.py --task buttons --task-kwargs sequence_length=2
+uv run python scripts/record_demos.py --task peg_insertion --task-kwargs mode=all
+uv run --extra warp python scripts/record_demos.py --task hammer_nails --backend warp --num-envs 64 --cameras
+
+# render saved episodes from their simulator states (any camera, any resolution)
+uv run --extra video python scripts/replay.py data/hammer.hdf5 --episodes 0 1 --camera front wrist
+```
+
+From Python:
+
+```python
+from franka_sim.policies import make_policy
+from franka_sim.recording import DemoWriter, collect_demos
+
+env = franka_sim.make("hammer_nails", num_envs=8, action_mode="ee_pose", cameras=("front", "wrist"))
+with DemoWriter("data/hammer.hdf5", env) as writer:
+    stats = collect_demos(env, make_policy(env, noise=0.002), 100, writer,
+                          conditions=lambda k: {"target": k % 4})
+```
+
+The HDF5 layout is robomimic-style, with one `data/demo_<k>` group per episode. Each group holds
+the observations (images are gzipped uint8), `actions`, the same command as `commands/joint_pos`,
+`commands/ee_pose` and `commands/gripper`, plus `rewards`, `success` and `dones`. It also stores the
+full simulator `states` (for exact replay), and `cond/<key>` with the episode's conditioning
+(e.g. `cond/target`). The language instruction and reset options are stored as attributes. See
+`franka_sim/recording.py` for details.
+
+### Training data
+
+```python
+from franka_sim.dataset import BCDataset
+
+ds = BCDataset("data/hammer.hdf5", obs_keys=["joint_pos", "gripper_width", "rgb_wrist", "target_onehot"],
+               obs_horizon=2, action_horizon=16, action_key="commands/joint_pos")
+sample = ds[0]   # {"obs/rgb_wrist": (2,128,128,3) uint8, "actions": (16, 8), "cond/target": (), ...}
+# works directly with torch.utils.data.DataLoader; ds.stats() gives normalization statistics
+```
+
+## Layout
+
+```
+src/franka_sim/
+  env.py            FrankaEnv: batched reset/step, action modes, observations, rendering
+  gym_env.py        single-env gymnasium wrapper
+  scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
+  ik.py             damped-least-squares IK
+  backends/         cpu.py (MuJoCo), warp.py (MuJoCo Warp)
+  tasks/            reach, hammer_nails, peg_insertion, buttons; objects.py = procedural assets
+  policies/         scripted experts
+  recording.py      HDF5 demo writer / reader, batched collection loop
+  dataset.py        BCDataset (observation history + action chunks)
+scripts/            record_demos.py, replay.py, benchmark.py
+```
+
+The Panda model is `mjx_panda.xml` from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
+(Apache-2.0, see `src/franka_sim/assets/panda/LICENSE`). The scene builder adds gravity
+compensation to the arm.

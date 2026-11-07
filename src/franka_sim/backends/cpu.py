@@ -58,6 +58,9 @@ class CpuBackend(Backend):
         def run(d):
             for _ in range(nsubsteps):
                 mujoco.mj_step(self.model, d)
+            # mj_step leaves derived quantities (xpos, site_xpos, ...) one substep stale; refresh them
+            # so observations describe the current qpos.
+            mujoco.mj_forward(self.model, d)
 
         self._map(run)
 

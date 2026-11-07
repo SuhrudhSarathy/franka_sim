@@ -85,6 +85,7 @@ class WarpBackend(Backend):
     def _substeps(self, n: int) -> None:
         for _ in range(n):
             mjw.step(self.m, self.d)
+        mjw.forward(self.m, self.d)  # refresh derived quantities for the current state (see CpuBackend)
 
     def step(self, ctrl: np.ndarray, nsubsteps: int = 1) -> None:
         ctrl = np.broadcast_to(np.asarray(ctrl, dtype=np.float32), (self.num_envs, self.model.nu))
