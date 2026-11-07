@@ -59,7 +59,7 @@ a dataset can store all of them.
 
 ```python
 env = franka_sim.make("reach", num_envs=4096, backend="warp",
-                      backend_kwargs={"device": "cuda:0", "nconmax": 64, "njmax": 256})
+                      backend_kwargs={"device": "cuda:0", "nconmax": 128, "njmax": 384})
 ```
 
 * With `backend="warp"`, all envs are `nworld` worlds in a single MuJoCo Warp `Data`. On CUDA, each
@@ -79,23 +79,53 @@ Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp 
 | task | objects | conditioning (`info["cond_*"]`, `reset(options=...)`) | success |
 |---|---|---|---|
 | `reach` | mocap target sphere | `goal_pos` | gripper within 2 cm of the goal |
-| `hammer_nails` | hammer on a stand, board with 4 identical nails at random positions (re-sampled every reset) on friction slide joints | `target` nail index (0 = furthest to the robot's left) | target nail driven ≥ 75 %, no other nail > 25 % |
-| `peg_insertion` | 3 colored square pegs (random position and yaw), receptacle with 3 matching holes | `target` peg index (`mode="single"`), or `mode="all"` | target peg (or every peg) seated in its hole |
-| `buttons` | panel with 4 colored spring-loaded buttons | `sequence` of buttons (`sequence_length` ≥ 1, or `target`) | buttons pressed in order; a wrong press fails the episode |
+| `hammer_nails` | hammer on a stand; board with 4 identical nails at random positions, on friction slide joints | `target` nail (0 = furthest to the robot's left) | target nail driven ≥ 75 %, no other nail > 25 % |
+| `buttons` | panel with 4 colored spring-loaded buttons | `sequence` of buttons (`sequence_length` ≥ 1, or `target`) | buttons pressed in order; a wrong press fails |
+| `peg_insertion` | 3 colored square pegs, receptacle with 3 matching holes (5 mm clearance) | `targets` / `target` | requested pegs seated |
+| `gear_assembly` | 3 spur gears (small / medium / large) lying flat; plate with 3 shafts (3 mm bore clearance) spaced so the gears mesh | `targets`: assembly order (default `mode="all"`) | every requested gear on its shaft |
+| `kitting` | 4 machined parts (block, cylinder, bar, cube); kit tray with a fitted compartment per part | `targets`: the pick list (default 2 parts, `mode="subset"`) | requested parts aligned in their compartments |
+| `pcb_insertion` | expansion card standing in a rack; motherboard with 3 card-edge connectors (1.4 mm clearance per side) | `target` connector (0 = leftmost) | card fully seated in the target connector |
+
+**Randomization.** Every reset samples:
+- the robot start pose (end-effector offset of ±8/15/8 cm and ±0.5 rad yaw, solved with IK, plus
+  joint noise);
+- the position and yaw of every fixture: nail board, hammer stand, receptacle, gear plate, kit tray,
+  card rack, motherboard and button panel;
+- the position and yaw of every free object: the hammer (on either side of the board), pegs, gears,
+  parts and the card;
+- the per-episode condition.
+
+Layouts are rejection-sampled, so objects never start where the gripper would hit them while it
+works at the fixture. Pass `randomize_start=False` to the env, or `task_kwargs={"randomize": False}`,
+for fixed layouts.
+
+`peg_insertion`, `gear_assembly`, `kitting` and `pcb_insertion` share `InsertionTask`, which supports
+`mode="single" | "subset" | "all"`. They also share an observation layout: `obj_pos`, `obj_quat`,
+`goal_pos`, `fixture_quat`, `obj_inserted`, `targets_mask`, `target_onehot`, `target_obj_pos`,
+`target_goal_pos`. So one policy, or one multi-task model, works across all of them.
 
 Each task has a language instruction per env (`env.instructions()`), for example "pick up the hammer
-and hit the second nail from the left". Pass task options as `franka_sim.make("buttons", task_kwargs={"sequence_length": 2})`.
-All assets are made from primitive geoms. The fixtures (nail board, each nail socket, receptacle,
-button panel) are mocap bodies, so they can be placed independently in every world on both backends.
-To add your own task, subclass `franka_sim.Task` (`build`, `bind`, `reset`, `observe`, `evaluate`)
-and call `franka_sim.register_task`.
+and hit the second nail from the left", "assemble the gears: the small gear, then the large gear,
+then the medium gear", "kit the bar, then the cube", or "insert the card into the rightmost
+connector". Pass task options as `franka_sim.make("kitting", task_kwargs={"mode": "all"})`.
+
+All assets are made from primitive geoms, and collision bitmasks keep contact counts low for
+MuJoCo Warp. The fixtures are mocap bodies, so they can be placed independently in every world on
+both backends. To add your own task, subclass `franka_sim.Task` (or `InsertionTask` for
+pick-and-insert) and call `franka_sim.register_task`.
 
 ## Scripted demos and recording
 
 Every task has a scripted expert (`franka_sim.policies.make_policy(env)`). These are waypoint
 state machines that emit `ee_pose` actions and close the loop on object poses. For example, the
 hammer policy aims the hammer *face*, not the gripper, at the target nail, and keeps striking until
-the nail is driven in. Each policy keeps its own state per env, so it works with batched envs whose
+the nail is driven in. All insertion tasks use one `InsertionPolicy`, which:
+- opens the gripper only as wide as the part needs;
+- steers the part's leading edge;
+- matches the fixture's yaw, modulo the part's symmetry;
+- re-grasps if a part slips.
+
+Over 40–80 randomized episodes per task, the scripted experts succeed 100 % of the time. Each policy keeps its own state per env, so it works with batched envs whose
 episodes start and end at different times.
 
 ```sh
@@ -157,7 +187,7 @@ src/franka_sim/
   scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
   ik.py             damped-least-squares IK
   backends/         cpu.py (MuJoCo), warp.py (MuJoCo Warp)
-  tasks/            reach, hammer_nails, peg_insertion, buttons; objects.py = procedural assets
+  tasks/            reach, hammer_nails, buttons, insertion.py (pegs, gears, kitting, pcb); objects.py = assets
   policies/         scripted experts
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)

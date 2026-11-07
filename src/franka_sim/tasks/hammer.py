@@ -7,7 +7,7 @@ import numpy as np
 
 from franka_sim.backends.base import Backend
 from franka_sim.tasks import objects as obj
-from franka_sim.tasks.base import Evaluation, Task, sample_separated, yaw_quat
+from franka_sim.tasks.base import Evaluation, Task, rotate2d, sample_separated, yaw_quat
 
 
 class HammerNailsTask(Task):
@@ -60,11 +60,17 @@ class HammerNailsTask(Task):
         options = options or {}
         n = len(env_ids)
         if self.randomize:
-            board_xy = rng.uniform([0.55, 0.02], [0.62, 0.12], size=(n, 2))
-            hammer_xy = rng.uniform([0.38, -0.33], [0.46, -0.25], size=(n, 2))
-            hammer_yaw = rng.uniform(-0.2, 0.2, size=n)
+            # Board anywhere in front of the robot, any modest yaw; the hammer lies on a random side
+            # of the board (far enough to never overlap it) with a random heading.
+            board_xy = rng.uniform([0.5, -0.08], [0.62, 0.08], size=(n, 2))
+            board_yaw = rng.uniform(-0.4, 0.4, size=n)
+            side = rng.choice([-1.0, 1.0], size=n)
+            hammer_xy = np.stack([rng.uniform(0.36, 0.52, size=n),
+                                  board_xy[:, 1] + side * rng.uniform(0.33, 0.38, size=n)], axis=1)
+            hammer_yaw = rng.uniform(-1.0, 1.0, size=n)
         else:
             board_xy = np.tile([0.58, 0.07], (n, 1))
+            board_yaw = np.zeros(n)
             hammer_xy = np.tile([0.42, -0.29], (n, 1))
             hammer_yaw = np.zeros(n)
         target = rng.integers(0, self.num_nails, size=n)
@@ -79,22 +85,25 @@ class HammerNailsTask(Task):
         qpos[:, self.nail_qadr] = 0.0
 
         mocap = self.default_mocap_pos(n)
+        quat = self.default_mocap_quat(n)
         mocap[:, self.board_mocap, :2] = board_xy
+        quat[:, self.board_mocap] = yaw_quat(board_yaw)
         lo, hi = -np.array(obj.NAIL_REGION_HALF), np.array(obj.NAIL_REGION_HALF)
         for k in range(n):
             if self.randomize:
                 local = sample_separated(rng, self.num_nails, lo, hi, self.min_nail_dist)
             else:
                 local = np.stack([np.zeros(self.num_nails), np.linspace(hi[1], lo[1], self.num_nails)], 1)
-            local = local[np.argsort(-local[:, 1])]  # index 0 = furthest left (+y)
-            mocap[k, self.nail_mocap, :2] = board_xy[k] + local
+            world = board_xy[k] + rotate2d(local, board_yaw[k])
+            world = world[np.argsort(-world[:, 1])]  # index 0 = furthest to the robot's left (+y)
+            mocap[k, self.nail_mocap, :2] = world
+            quat[k, self.nail_mocap] = yaw_quat(board_yaw[k])
         # The stand goes under the back of the handle, following the hammer's yaw.
         back = -0.07
         mocap[:, self.rest_mocap, 0] = hammer_xy[:, 0] + back * np.cos(hammer_yaw)
         mocap[:, self.rest_mocap, 1] = hammer_xy[:, 1] + back * np.sin(hammer_yaw)
-        rest_quat = np.tile([1.0, 0, 0, 0], (n, self.model.nmocap, 1))
-        rest_quat[:, self.rest_mocap] = yaw_quat(hammer_yaw)
-        return {"mocap_pos": mocap, "mocap_quat": rest_quat}
+        quat[:, self.rest_mocap] = yaw_quat(hammer_yaw)
+        return {"mocap_pos": mocap, "mocap_quat": quat}
 
     def nail_depth(self, sim: Backend) -> np.ndarray:
         return -sim.read("qpos")[:, self.nail_qadr] / obj.NAIL_TRAVEL

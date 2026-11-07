@@ -35,14 +35,18 @@ class FrankaEnv:
             ``front``, ``side``, ``top``, ``wrist``.
         image_size: ``(height, width)`` of rendered observations.
         max_episode_steps: overrides the task's default horizon.
-        init_noise: std-dev of Gaussian noise added to the home joint configuration on reset.
+        init_noise: std-dev of Gaussian noise added to the start joint configuration on reset.
+        randomize_start: sample the start end-effector pose on reset: a position offset from the
+            home pose uniformly within ``start_pos_range`` (m, per axis) and a yaw within
+            ``start_yaw_range`` (rad), solved with IK. ``False`` starts at the home pose.
         backend_kwargs: forwarded to the backend (e.g. ``device`` / ``nconmax`` for Warp).
     """
 
     def __init__(self, task: str | Task = "reach", *, num_envs: int = 1, backend: str = "cpu",
                  action_mode: str = "ee_delta", control_freq: float = 20.0, cameras=(),
                  image_size: tuple[int, int] = (128, 128), max_episode_steps: int | None = None,
-                 init_noise: float = 0.02, seed: int | None = None, task_kwargs: dict | None = None,
+                 init_noise: float = 0.02, randomize_start: bool = True,
+                 start_pos_range=(0.08, 0.15, 0.08), start_yaw_range: float = 0.5, seed: int | None = None, task_kwargs: dict | None = None,
                  backend_kwargs: dict | None = None):
         if action_mode not in ACTION_DIMS:
             raise ValueError(f"unknown action_mode {action_mode!r}; expected one of {list(ACTION_DIMS)}")
@@ -53,6 +57,9 @@ class FrankaEnv:
         self.cameras = tuple(cameras)
         self.image_size = tuple(image_size)
         self.init_noise = init_noise
+        self.randomize_start = randomize_start
+        self.start_pos_range = np.asarray(start_pos_range, dtype=float)
+        self.start_yaw_range = start_yaw_range
         self.max_episode_steps = max_episode_steps or self.task.max_episode_steps
 
         self.spec = build_spec(self.task, image_size=self.image_size)
@@ -98,6 +105,22 @@ class FrankaEnv:
         ids = np.arange(self.num_envs) if env_ids is None else np.atleast_1d(np.asarray(env_ids))
         n = len(ids)
         qpos = np.tile(self._home_qpos(), (n, 1))
+        if self.randomize_start:
+            home_pos, home_quat = self.ik.site_pose(qpos[0])
+            margin = 0.2  # keep start configurations well inside the joint limits
+            for k in range(n):
+                for _attempt in range(20):
+                    pos = home_pos + self._rng.uniform(-self.start_pos_range, self.start_pos_range)
+                    yaw = self._rng.uniform(-self.start_yaw_range, self.start_yaw_range)
+                    quat = quat_mul(np.array([np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]), home_quat)
+                    q = qpos[k].copy()
+                    for _ in range(5):  # IK takes bounded steps; iterate to converge from home
+                        q[self.arm_qadr] = self.ik.solve(q, pos, quat)
+                    arm = q[self.arm_qadr]
+                    reached = np.linalg.norm(self.ik.site_pose(q)[0] - pos) < 0.005
+                    if reached and np.all(arm > self.ik.lo + margin) and np.all(arm < self.ik.hi - margin):
+                        qpos[k, self.arm_qadr] = arm
+                        break
         if self.init_noise > 0:
             qpos[:, self.arm_qadr] += self._rng.normal(0, self.init_noise, size=(n, 7))
         extra = self.task.reset(ids, qpos, self._rng, options) or {}

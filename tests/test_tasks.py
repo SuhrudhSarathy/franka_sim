@@ -28,7 +28,8 @@ def test_task_builds_and_steps(task):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.parametrize("task", ["hammer_nails", "peg_insertion", "buttons"])
+@pytest.mark.parametrize("task", ["hammer_nails", "peg_insertion", "buttons", "gear_assembly", "kitting",
+                                  "pcb_insertion"])
 def test_objects_at_rest(task, backend):
     """Objects settle without drifting, flying off or triggering success on their own."""
     env = franka_sim.make(task, num_envs=2, backend=backend, seed=1)
@@ -40,7 +41,7 @@ def test_objects_at_rest(task, backend):
         assert np.abs(obs["nail_depth"]).max() < 0.05
         assert np.abs(obs["hammer_pos"][:, 2] - objects.HAMMER_HANDLE_Z).max() < 0.005
     if task == "peg_insertion":
-        assert np.abs(obs["peg_pos"].reshape(2, -1, 3)[..., 2] - objects.PEG_HALF[2]).max() < 0.005
+        assert np.abs(obs["obj_pos"].reshape(2, -1, 3)[..., 2] - objects.PEG_HALF[2]).max() < 0.005
     env.close()
 
 
@@ -91,3 +92,39 @@ def test_nail_layout_randomized_and_ordered():
     obs2, _ = env.reset()
     assert np.abs(obs2["nail_pos"] - obs["nail_pos"]).max() > 0.01
     env.close()
+
+
+def test_insertion_conditioning():
+    env = franka_sim.make("kitting", num_envs=2, seed=0)
+    obs, info = env.reset(options={"targets": [3, 1]})
+    assert info["cond_targets"].tolist() == [[3, 1], [3, 1]]
+    np.testing.assert_allclose(obs["targets_mask"][0], [0, 1, 0, 1])
+    assert obs["target_onehot"][0].argmax() == 3
+    assert env.instructions()[0] == "kit the cube, then the cylinder"
+
+    env = franka_sim.make("pcb_insertion", num_envs=2, seed=0)
+    obs, info = env.reset(options={"target": 2})
+    assert info["cond_target"].tolist() == [2, 2]
+    np.testing.assert_allclose(obs["goal_pos"], obs["slot_pos"][:, 6:9])
+    assert env.instructions()[0] == "insert the card into the rightmost connector"
+
+
+def test_everything_is_randomized():
+    """Robot start pose, objects and fixtures all change between resets."""
+    for task in ("hammer_nails", "peg_insertion", "gear_assembly", "kitting", "pcb_insertion", "buttons"):
+        env = franka_sim.make(task, seed=0)
+        first, _ = env.reset()
+        second, _ = env.reset()
+        assert np.linalg.norm(first["ee_pos"] - second["ee_pos"]) > 0.01, task
+        for key, v in first.items():
+            if key.endswith(("_pos", "_quat")) and not key.startswith(("ee_", "target_")) and key in second:
+                if np.abs(v).sum() > 0:
+                    assert np.abs(v - second[key]).max() > 1e-3, (task, key)
+        env.close()
+
+
+def test_start_pose_fixed_when_disabled():
+    env = franka_sim.make("reach", seed=0, randomize_start=False, init_noise=0.0)
+    a, _ = env.reset()
+    b, _ = env.reset()
+    np.testing.assert_allclose(a["joint_pos"], b["joint_pos"])

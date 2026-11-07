@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mujoco
 import numpy as np
 
 from franka_sim import robot
@@ -78,76 +79,102 @@ class HammerPolicy(ScriptedPolicy):
         return Target(self.cmd_pos[i].copy(), yaw, CLOSED), False
 
 
-class PegPolicy(ScriptedPolicy):
-    """Grasp a peg from the top, align its yaw with the hole, lower it in, release. Repeats for
-    every peg when the task is in ``mode="all"``."""
+class InsertionPolicy(ScriptedPolicy):
+    """Generic pick-align-insert expert for every ``InsertionTask`` (pegs, gears, kitting, PCB).
 
-    def __init__(self, env, **kwargs):
+    For each requested object in turn: grasp it from the top at the task's grasp height and yaw, lift,
+    steer the *object* (closed loop on its pose) above its goal while rotating it to the fixture's yaw
+    (modulo the object's symmetry), lower it in, release and retreat. An object that was dropped or
+    missed is simply picked again, since it is still the next unfinished target.
+    """
+
+    approach = 0.06  # height of the object above its goal before the final descent
+    lift = 0.2
+
+    def __init__(self, env, insert_speed: float = 0.006, **kwargs):
         super().__init__(env, **kwargs)
-        self.mode = getattr(env.task, "mode", "single")
-
-    def _peg(self, i, obs):
-        mem = self.memory[i]
-        if self.mode == "single":
-            return int(np.argmax(obs["target_onehot"][i]))
-        if "order" not in mem:
-            mem["order"] = list(self.rng.permutation(len(obs["peg_inserted"][i])))
-        return int(mem["order"][0])
+        self.task = env.task
+        self.insert_speed = insert_speed
 
     def plan(self, i, obs, stage):
         mem = self.memory[i]
-        if self.mode == "all" and "order" in mem and not mem["order"]:
-            mem["finished"] = True
-            return Target(self.cmd_pos[i].copy(), self.cmd_yaw[i], OPEN), False
-        k = self._peg(i, obs)
-        peg = obs["peg_pos"][i].reshape(-1, 3)[k]
-        peg_yaw = float(wrap_angle(quat_yaw(obs["peg_quat"][i].reshape(-1, 4)[k]), np.pi / 2))
-        hole = obs["hole_pos"][i].reshape(-1, 3)[k]
-        half_h = obj.PEG_HALF[2]
-        ee = obs["ee_pos"][i]
-
+        task = self.task
+        hold = Target(self.cmd_pos[i].copy(), self.cmd_yaw[i], mem.get("open", OPEN))
+        remaining = (obs["targets_mask"][i] > 0) & (obs["obj_inserted"][i] < 0.5)
         if stage == 0:
-            mem["grasp_yaw"] = peg_yaw
-            t = Target(peg + 0.12 * UP, peg_yaw, OPEN)
+            if not remaining.any():
+                mem["finished"] = True
+                return hold, False
+            mem["k"] = int(np.argmax(obs["target_onehot"][i]))
+            # Open only as wide as the object needs (+ margin): fewer collisions in clutter.
+            width = task.grasp_width[mem["k"]] if task.grasp_width else robot.GRIPPER_MAX_WIDTH
+            mem["open"] = float(np.clip(1.0 - (width + 0.03) / robot.GRIPPER_MAX_WIDTH, 0.0, 1.0))
+        k = mem["k"]
+        OPEN_K = mem["open"]
+        pos = obs["obj_pos"][i].reshape(-1, 3)[k]
+        yaw_obj = float(quat_yaw(obs["obj_quat"][i].reshape(-1, 4)[k]))
+        goal = obs["goal_pos"][i].reshape(-1, 3)[k]
+        yaw_goal = float(quat_yaw(obs["fixture_quat"][i]))
+        sym = task.symmetry[k]
+        up = task.grasp_offset[k] * UP
+        ee = obs["ee_pos"][i]
+        # Steer the point that enters first (e.g. a card's bottom edge), which stays correct even if
+        # the object tilts in the grasp.
+        tip_off = task.tip_offset[k] if task.tip_offset else 0.0
+        rot = np.empty(9)
+        mujoco.mju_quat2Mat(rot, obs["obj_quat"][i].reshape(-1, 4)[k])
+        tip = pos + rot.reshape(3, 3)[:, 2] * tip_off
+        goal_tip = goal + tip_off * UP
+
+        if stage in (3, 4, 5) and np.linalg.norm(pos + up - ee) > 0.03:
+            # Lost (or never got) the object: release, back off and grasp it again.
+            mem["regrasps"] = mem.get("regrasps", 0) + 1
+            self.stage[i] = 5
+            return hold, True
+
+        if stage == 0:  # above the grasp point
+            if self.timer[i] == 0 or "gyaw" not in mem:  # choose the grasp yaw once per pick
+                if sym is None:  # round object: any yaw works; return toward the neutral wrist
+                    mem["gyaw"] = float(np.clip(self.cmd_yaw[i], -1.0, 1.0))
+                else:
+                    mem["gyaw"] = float(wrap_angle(yaw_obj + task.grasp_yaw[k], min(sym, np.pi)))
+            t = Target(pos + up + 0.12 * UP, mem["gyaw"], OPEN_K)
             return t, self.settled(i, obs, t, tol=0.02)
-        if stage == 1:
-            t = Target(peg + 0.015 * UP, mem["grasp_yaw"], OPEN, speed=0.01)
-            return t, self.settled(i, obs, t, tol=0.006)
-        if stage == 2:
-            t = Target(self.cmd_pos[i].copy(), mem["grasp_yaw"], CLOSED)
-            return t, self.timer[i] >= 10
-        if stage == 3:
-            t = Target(np.array([*self.cmd_pos[i][:2], 0.22]), mem["grasp_yaw"], CLOSED)
+        if stage == 1:  # descend around the object (close anyway if blocked a few mm short)
+            t = Target(pos + up, mem["gyaw"], OPEN_K, speed=0.01)
+            return t, self.settled(i, obs, t, tol=0.006) or (self.reached(i, t) and self.timer[i] > 40)
+        if stage == 2:  # close
+            return Target(self.cmd_pos[i].copy(), mem["gyaw"], CLOSED), self.timer[i] >= 10
+        if stage == 3:  # lift clear of everything (slowly at first, to pull the object out cleanly)
+            z = max(self.lift, goal[2] + self.approach + 0.08)
+            slow = self.cmd_pos[i][2] < pos[2] + task.grasp_offset[k] + 0.03 and self.timer[i] < 30
+            t = Target(np.array([*self.cmd_pos[i][:2], z]), mem["gyaw"], CLOSED, speed=0.006 if slow else None)
             return t, self.reached(i, t)
-        if stage in (4, 5):
-            # Rotate so the peg's yaw (mod 90 deg) matches the hole's, and steer the peg (not the
-            # gripper) over the hole.
-            yaw = float(self.cmd_yaw[i] - peg_yaw)
-            height = 0.07 if stage == 4 else 0.004
-            desired = hole + (half_h + height) * UP
-            err = desired - peg
+        if stage in (4, 5):  # align the object over its goal, then lower it in
+            dyaw = 0.0 if sym is None else float(wrap_angle(yaw_goal - yaw_obj, sym))
+            yaw = float(self.cmd_yaw[i] + dyaw)
+            if sym is not None and abs(yaw) > 2.2:  # an equivalent orientation that spares the wrist
+                yaw -= np.sign(yaw) * sym
+                dyaw = yaw - float(self.cmd_yaw[i])
             if stage == 4:
-                t = Target(ee + err, yaw, CLOSED)
-                done = np.linalg.norm(err[:2]) < 0.003 and abs(err[2]) < 0.01 and abs(peg_yaw) < 0.03 \
-                    and self.timer[i] > 5
-                return t, done
-            t = Target(ee + err, yaw, CLOSED, speed=0.006)
-            return t, (peg[2] - hole[2] < half_h + 0.012) or self.timer[i] > 60
-        if stage == 6:
-            t = Target(self.cmd_pos[i].copy(), self.cmd_yaw[i], OPEN)
-            return t, self.timer[i] >= 6
-        if stage == 7:
-            t = Target(np.array([*self.cmd_pos[i][:2], 0.22]), self.cmd_yaw[i], OPEN)
+                err = goal_tip + self.approach * UP - tip
+                if np.linalg.norm(err[:2]) > 0.01:  # travel at lift height, descend only once above
+                    err[2] = 0.0
+                done = (np.linalg.norm(err[:2]) < 0.0015 and abs(err[2]) < 0.01 and abs(dyaw) < 0.02
+                        and self.timer[i] > 5)
+                return Target(ee + err, yaw, CLOSED), done
+            err = goal_tip - 0.003 * UP - tip
+            t = Target(ee + err, yaw, CLOSED, speed=self.insert_speed)
+            return t, (pos[2] - goal[2] < 0.5 * task.z_tol) or self.timer[i] > 60
+        if stage == 6:  # release
+            return hold, self.timer[i] >= 6
+        if stage == 7:  # retreat, then the next object (or finish)
+            t = Target(np.array([*self.cmd_pos[i][:2], max(self.lift, goal[2] + 0.12)]), self.cmd_yaw[i], OPEN_K)
             if not self.reached(i, t):
                 return t, False
-            if self.mode == "all":
-                mem["order"].pop(0)
-                if mem["order"]:
-                    self.stage[i] = -1  # -> 0 on return: next peg
-                    return t, True
+            self.stage[i] = -1
             return t, True
-        mem["finished"] = True
-        return Target(self.cmd_pos[i].copy(), self.cmd_yaw[i], OPEN), False
+        return hold, False
 
 
 class ButtonPolicy(ScriptedPolicy):
@@ -183,15 +210,21 @@ class ButtonPolicy(ScriptedPolicy):
 POLICIES = {
     "reach": ReachPolicy,
     "hammer_nails": HammerPolicy,
-    "peg_insertion": PegPolicy,
+    "peg_insertion": InsertionPolicy,
+    "gear_assembly": InsertionPolicy,
+    "kitting": InsertionPolicy,
+    "pcb_insertion": InsertionPolicy,
     "buttons": ButtonPolicy,
 }
 
 
 def make_policy(env, **kwargs) -> ScriptedPolicy:
     """The scripted expert for ``env.task``."""
-    try:
-        cls = POLICIES[env.task.name]
-    except KeyError:
-        raise ValueError(f"no scripted policy for task {env.task.name!r}") from None
+    from franka_sim.tasks.insertion import InsertionTask
+
+    cls = POLICIES.get(env.task.name)
+    if cls is None and isinstance(env.task, InsertionTask):
+        cls = InsertionPolicy
+    if cls is None:
+        raise ValueError(f"no scripted policy for task {env.task.name!r}")
     return cls(env, **kwargs)

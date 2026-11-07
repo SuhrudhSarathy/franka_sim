@@ -63,6 +63,17 @@ class DiffIK:
         self._jacp = np.zeros((3, model.nv))
         self._jacr = np.zeros((3, model.nv))
 
+    def _step(self, jac: np.ndarray, err: np.ndarray, q: np.ndarray, frozen: np.ndarray | None = None) -> np.ndarray:
+        jjt = jac @ jac.T + self.damping * np.eye(jac.shape[0])
+        pinv = jac.T @ np.linalg.inv(jjt)
+        dq = pinv @ err
+        # Null-space posture regularization toward the home configuration.
+        null = np.eye(7) - pinv @ jac
+        dq += null @ (self.posture_gain * (robot.HOME_QPOS - q))
+        if frozen is not None:
+            dq[frozen] = 0.0
+        return dq
+
     def site_pose(self, qpos: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Forward kinematics: (pos, quat wxyz) of the EE site for a full ``qpos``."""
         d = self.data
@@ -89,12 +100,12 @@ class DiffIK:
                 err = np.concatenate([err_p, self.rot_weight * err_r])
             else:
                 jac, err = jp, err_p
-            jjt = jac @ jac.T + self.damping * np.eye(jac.shape[0])
-            dq = jac.T @ np.linalg.solve(jjt, err)
-            # Null-space posture regularization toward the home configuration.
-            pinv = jac.T @ np.linalg.inv(jjt)
-            null = np.eye(7) - pinv @ jac
-            dq += null @ (self.posture_gain * (robot.HOME_QPOS - q))
+            dq = self._step(jac, err, q)
+            # Joints pinned at a limit and pushed further into it cannot help: drop them and re-solve
+            # with the remaining joints, so the arm does not get stuck folded against a limit.
+            pinned = ((q <= self.lo + 1e-4) & (dq < 0)) | ((q >= self.hi - 1e-4) & (dq > 0))
+            if pinned.any():
+                dq = self._step(jac * ~pinned, err, q, pinned)
             norm = np.linalg.norm(dq)
             if norm > self.max_step:
                 dq *= self.max_step / norm

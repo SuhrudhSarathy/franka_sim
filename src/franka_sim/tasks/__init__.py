@@ -4,7 +4,11 @@ from collections.abc import Callable
 
 from franka_sim.tasks.base import Evaluation, Task
 from franka_sim.tasks.buttons import ButtonPressTask
+from franka_sim.tasks.gears import GearAssemblyTask
 from franka_sim.tasks.hammer import HammerNailsTask
+from franka_sim.tasks.insertion import InsertionTask
+from franka_sim.tasks.kitting import KittingTask
+from franka_sim.tasks.pcb import PCBInsertionTask
 from franka_sim.tasks.pegs import PegInsertionTask
 from franka_sim.tasks.reach import ReachTask
 
@@ -13,6 +17,9 @@ TASKS: dict[str, Callable[..., Task]] = {
     "hammer_nails": HammerNailsTask,
     "peg_insertion": PegInsertionTask,
     "buttons": ButtonPressTask,
+    "gear_assembly": GearAssemblyTask,
+    "kitting": KittingTask,
+    "pcb_insertion": PCBInsertionTask,
 }
 
 
@@ -30,6 +37,7 @@ def register_task(name: str, factory: Callable[..., Task]) -> None:
 
 
 __all__ = [
-    "TASKS", "ButtonPressTask", "Evaluation", "HammerNailsTask", "PegInsertionTask", "ReachTask", "Task", "make_task",
+    "TASKS", "ButtonPressTask", "Evaluation", "GearAssemblyTask", "HammerNailsTask", "InsertionTask", "KittingTask",
+    "PCBInsertionTask", "PegInsertionTask", "ReachTask", "Task", "make_task",
     "register_task",
 ]

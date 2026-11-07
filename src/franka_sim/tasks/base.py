@@ -29,6 +29,13 @@ def sample_separated(rng: np.random.Generator, n: int, low, high, min_dist: floa
     raise RuntimeError(f"could not place {n} points {min_dist} apart in {low}..{high}")
 
 
+def rotate2d(xy: np.ndarray, yaw) -> np.ndarray:
+    """Rotate (..., 2) points by yaw (radians) about the origin."""
+    c, s = np.cos(yaw), np.sin(yaw)
+    xy = np.asarray(xy, dtype=float)
+    return np.stack([c * xy[..., 0] - s * xy[..., 1], s * xy[..., 0] + c * xy[..., 1]], axis=-1)
+
+
 @dataclass
 class Evaluation:
     reward: np.ndarray  # (N,) float
@@ -94,6 +101,14 @@ class Task:
             if self.model.body_mocapid[b] >= 0:
                 pos[self.model.body_mocapid[b]] = self.model.body_pos[b]
         return np.tile(pos, (n, 1, 1))
+
+    def default_mocap_quat(self, n: int) -> np.ndarray:
+        """``(n, nmocap, 4)`` array of the mocap bodies' model orientations, to edit in ``reset``."""
+        quat = np.tile([1.0, 0.0, 0.0, 0.0], (self.model.nmocap, 1))
+        for b in range(self.model.nbody):
+            if self.model.body_mocapid[b] >= 0:
+                quat[self.model.body_mocapid[b]] = self.model.body_quat[b]
+        return np.tile(quat, (n, 1, 1))
 
     def joint_qadr(self, joint: str) -> int:
         return int(self.model.jnt_qposadr[self.model.joint(joint).id])

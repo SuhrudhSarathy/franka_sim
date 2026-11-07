@@ -7,7 +7,7 @@ import numpy as np
 
 from franka_sim.backends.base import Backend
 from franka_sim.tasks import objects as obj
-from franka_sim.tasks.base import Evaluation, Task
+from franka_sim.tasks.base import Evaluation, Task, yaw_quat
 
 
 class ButtonPressTask(Task):
@@ -61,11 +61,13 @@ class ButtonPressTask(Task):
         self.failed[env_ids] = False
         self.was_pressed[env_ids] = False
         mocap = self.default_mocap_pos(n)
+        quat = self.default_mocap_quat(n)
         if self.randomize:
-            mocap[:, self.panel_mocap, :2] = rng.uniform([0.52, -0.1], [0.62, 0.1], size=(n, 2))
+            mocap[:, self.panel_mocap, :2] = rng.uniform([0.45, -0.2], [0.65, 0.2], size=(n, 2))
+            quat[:, self.panel_mocap] = yaw_quat(rng.uniform(-0.6, 0.6, size=n))
         else:
             mocap[:, self.panel_mocap, :2] = [0.57, 0.0]
-        return {"mocap_pos": mocap}
+        return {"mocap_pos": mocap, "mocap_quat": quat}
 
     def depth(self, sim: Backend) -> np.ndarray:
         return -sim.read("qpos")[:, self.button_qadr] / obj.BUTTON_TRAVEL

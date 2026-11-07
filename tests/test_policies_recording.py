@@ -12,6 +12,9 @@ from franka_sim.recording import DemoWriter, collect_demos, dataset_info, iter_e
     ("peg_insertion", {}),
     ("peg_insertion", {"mode": "all"}),
     ("buttons", {"sequence_length": 3}),
+    ("gear_assembly", {}),
+    ("kitting", {}),
+    ("pcb_insertion", {}),
 ])
 def test_scripted_policy_succeeds(task, kwargs):
     env = franka_sim.make(task, num_envs=3, action_mode="ee_pose", seed=7, task_kwargs=kwargs)

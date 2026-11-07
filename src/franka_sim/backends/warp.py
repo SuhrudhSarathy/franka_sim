@@ -33,7 +33,7 @@ class WarpBackend(Backend):
     name = "warp"
 
     def __init__(self, model: mujoco.MjModel, num_envs: int = 1, device: str | None = None,
-                 nconmax: int = 64, njmax: int = 256, use_graph: bool = True):
+                 nconmax: int = 128, njmax: int = 384, use_graph: bool = True):
         super().__init__(model, num_envs)
         wp.init()
         self.device = wp.get_device(device) if device is not None else wp.get_preferred_device()
