@@ -111,6 +111,9 @@ uv run python scripts/record_demos.py --task buttons --task-kwargs sequence_leng
 uv run python scripts/record_demos.py --task peg_insertion --task-kwargs mode=all
 uv run --extra warp python scripts/record_demos.py --task hammer_nails --backend warp --num-envs 64 --cameras
 
+# run the scripted expert on every environment and save one mp4 per episode (5 each) to videos/
+uv run --extra video python scripts/make_videos.py
+
 # render saved episodes from their simulator states (any camera, any resolution)
 uv run --extra video python scripts/replay.py data/hammer.hdf5 --episodes 0 1 --camera front wrist
 ```
@@ -158,7 +161,7 @@ src/franka_sim/
   policies/         scripted experts
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)
-scripts/            record_demos.py, replay.py, benchmark.py
+scripts/            record_demos.py, replay.py, make_videos.py, benchmark.py
 ```
 
 The Panda model is `mjx_panda.xml` from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
