@@ -54,3 +54,22 @@ a dataset can store all of them.
 
 `joint_pos`, `joint_vel`, `gripper_width`, `ee_pos`, `ee_quat` (wxyz), any task-specific keys, and
 `rgb_<camera>` for each requested camera. The cameras are `front`, `side`, `top` and `wrist`.
+
+## Backends
+
+```python
+env = franka_sim.make("reach", num_envs=4096, backend="warp",
+                      backend_kwargs={"device": "cuda:0", "nconmax": 64, "njmax": 256})
+```
+
+* With `backend="warp"`, all envs are `nworld` worlds in a single MuJoCo Warp `Data`. On CUDA, each
+  control step's physics substeps are captured once in a CUDA graph and then replayed. Without a
+  GPU, Warp runs its kernels on the CPU. That is correct but slow, and is only useful for testing.
+* `nconmax` and `njmax` are per-world buffer sizes. The backend warns when the contact buffer
+  overflows.
+* Rendering and IK run on the host. To render or solve IK for a world, its state is copied into an
+  `MjData`, so camera observations and `ee_*` action modes cost host time per env. For large
+  `num_envs`, use `joint_pos`/`joint_delta` actions and no cameras.
+* Physics agrees with the CPU backend to float32 precision (see `tests/test_warp.py`).
+
+Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp --num-envs 1 64 1024`.
