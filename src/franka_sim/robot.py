@@ -30,6 +30,11 @@ FINGERTIP_OFFSET = 0.012
 FINGER_MAX = 0.04
 GRIPPER_MAX_WIDTH = 2 * FINGER_MAX
 
+# Gripper servo (see scene.build_spec): force = KP * (ctrl - q) - KV * qdot, clamped to MAX_FORCE.
+GRIPPER_KP = 3000.0
+GRIPPER_KV = 60.0
+GRIPPER_MAX_FORCE = 70.0
+
 
 def gripper_ctrl(closure: np.ndarray) -> np.ndarray:
     """Map gripper closure in [0, 1] (0 = open, 1 = closed) to actuator control."""

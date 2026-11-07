@@ -28,14 +28,15 @@ METAL = (0.6, 0.62, 0.65, 1.0)
 GRAY = (0.35, 0.35, 0.38, 1.0)
 
 # Grippable objects get torsional friction (condim 4) so they do not pivot between the fingers.
-GRIP = {"condim": 4, "friction": [1.5, 0.02, 0.001], "solref": [0.01, 1], "solimp": [0.95, 0.99, 0.001, 0.5, 2]}
+GRIP = {"condim": 4, "friction": [1.5, 0.05, 0.001], "solref": [0.01, 1], "solimp": [0.95, 0.99, 0.001, 0.5, 2]}
 
 
 # --------------------------------------------------------------------------------------------
 # Hammer and nails
 # --------------------------------------------------------------------------------------------
-HAMMER_HANDLE_HALF = (0.10, 0.011, 0.011)
-HAMMER_HEAD_HALF = (0.022, 0.022, 0.045)
+HAMMER_HANDLE_HALF = (0.10, 0.013, 0.013)
+# Tall head: at the bottom of a strike the handle must still clear neighbouring (undriven) nails.
+HAMMER_HEAD_HALF = (0.022, 0.022, 0.07)
 HAMMER_HANDLE_Z = HAMMER_HEAD_HALF[2]  # handle height (above the floor) when the hammer rests on its head
 
 
@@ -69,37 +70,40 @@ def add_hammer_rest(spec: mujoco.MjSpec, name: str = "hammer_rest") -> mujoco.Mj
 NAIL_SHAFT = (0.005, 0.03)  # radius, half length
 NAIL_HEAD = (0.014, 0.004)  # radius, half height
 NAIL_TRAVEL = 0.04  # how far a nail can be driven
-BOARD_HALF = (0.06, 0.20, 0.02)
+BOARD_HALF = (0.10, 0.17, 0.02)
+NAIL_REGION_HALF = (0.075, 0.145)  # nails are placed within this (x, y) half extent of the board centre
+NAIL_HEAD_RGBA = (0.72, 0.74, 0.78, 1.0)
 
 
-def add_nail_board(spec: mujoco.MjSpec, num_nails: int = 4, name: str = "board", spacing: float = 0.09,
-                   pos=(0.58, 0.1, BOARD_HALF[2]), frictionloss: float = 6.0) -> mujoco.MjsBody:
-    """A wooden board (mocap) with ``num_nails`` nails in a row along y, each on a vertical slide joint.
+def add_nail_board(spec: mujoco.MjSpec, num_nails: int = 4, name: str = "board",
+                   pos=(0.58, 0.07, BOARD_HALF[2]), frictionloss: float = 6.0) -> mujoco.MjsBody:
+    """A wooden board with ``num_nails`` identical nails, each on a vertical slide joint.
 
-    Nail ``i`` is body ``nail{i}`` with joint ``nail{i}_joint``: 0 when sticking up, ``-NAIL_TRAVEL``
-    when fully driven in. Joint friction means it takes a real push (a hammer blow) to drive a nail.
-    Each nail head has a colored ring so nails can be referred to by color.
+    The board and every nail socket are separate mocap bodies, so both the board pose and the
+    position of each nail on it can be randomized per world (see ``HammerNailsTask.reset``).
+    Socket ``nail{i}_base`` sits on the board's top face; nail ``nail{i}`` hangs off it with joint
+    ``nail{i}_joint``: 0 when sticking up, ``-NAIL_TRAVEL`` when fully driven in. Joint friction means
+    it takes a real push (a hammer blow) to drive a nail.
     """
     board = spec.worldbody.add_body(name=name, mocap=True, pos=list(pos))
-    half_y = max(BOARD_HALF[1], spacing * (num_nails - 1) / 2 + 0.05)
-    board.add_geom(name=f"{name}_geom", type=BOX, size=[BOARD_HALF[0], half_y, BOARD_HALF[2]], rgba=DARK_WOOD)
-    top = BOARD_HALF[2]
+    board.add_geom(name=f"{name}_geom", type=BOX, size=list(BOARD_HALF), rgba=DARK_WOOD)
+    top = pos[2] + BOARD_HALF[2]
     for i in range(num_nails):
-        y = (i - (num_nails - 1) / 2) * spacing
-        color = COLORS[COLOR_NAMES[i % len(COLOR_NAMES)]]
-        board.add_geom(name=f"nail{i}_marker", type=CYL, size=[0.025, 0.0015, 0], pos=[0, y, top + 0.0015],
-                       rgba=color, contype=0, conaffinity=0)
-        shaft_bottom = top - NAIL_TRAVEL + 0.002  # fully driven: shaft sits inside the board
+        # Default layout: a row along y (reset() overrides it).
+        y = pos[1] + (i - (num_nails - 1) / 2) * 0.08
+        base = spec.worldbody.add_body(name=f"nail{i}_base", mocap=True, pos=[pos[0], y, top])
+        base.add_geom(name=f"nail{i}_hole", type=CYL, size=[0.009, 0.0008, 0], pos=[0, 0, 0.0008],
+                      rgba=(0.2, 0.14, 0.08, 1.0), contype=0, conaffinity=0)
         # gravcomp: soft joint friction would otherwise let the nail creep down under its own weight.
-        nail = board.add_body(name=f"nail{i}", pos=[0, y, top + NAIL_TRAVEL], gravcomp=1.0)
+        nail = base.add_body(name=f"nail{i}", pos=[0, 0, NAIL_TRAVEL], gravcomp=1.0)
         nail.add_joint(name=f"nail{i}_joint", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1],
                        range=[-NAIL_TRAVEL, 0], damping=2.0, frictionloss=frictionloss, armature=0.01)
-        # The shaft is visual only (it passes through the board); the head is what gets hit.
-        shaft_len = (top + NAIL_TRAVEL) - shaft_bottom
+        # The shaft is visual only (it passes into the board); the head is what gets hit.
+        shaft_len = NAIL_TRAVEL - 0.002 + NAIL_TRAVEL
         nail.add_geom(name=f"nail{i}_shaft", type=CYL, size=[NAIL_SHAFT[0], shaft_len / 2, 0],
                       pos=[0, 0, -shaft_len / 2], rgba=METAL, contype=0, conaffinity=0, mass=0.02)
         nail.add_geom(name=f"nail{i}_head", type=CYL, size=[NAIL_HEAD[0], NAIL_HEAD[1], 0],
-                      pos=[0, 0, NAIL_HEAD[1]], rgba=color, mass=0.01)
+                      pos=[0, 0, NAIL_HEAD[1]], rgba=NAIL_HEAD_RGBA, mass=0.01)
         nail.add_site(name=f"nail{i}_top", pos=[0, 0, 2 * NAIL_HEAD[1]], size=[0.004, 0, 0], rgba=[0, 0, 0, 0])
     return board
 

@@ -44,6 +44,15 @@ def build_spec(task: Task | None = None, *, image_size: tuple[int, int] = (480, 
     for name in robot.ROBOT_BODIES:
         spec.body(name).gravcomp = 1.0
 
+    # The menagerie gripper is a weak position servo (kp=350): it squeezes a 2 cm handle with only
+    # ~4 N, so tools pivot in the grasp. A stiffer servo grips with ~30-40 N per finger (the real
+    # Panda hand: 70 N continuous), clamped by the actuator's force range.
+    grip = spec.actuator(robot.GRIPPER_ACTUATOR)
+    grip.gainprm[0] = robot.GRIPPER_KP
+    grip.biasprm[1] = -robot.GRIPPER_KP
+    grip.biasprm[2] = -robot.GRIPPER_KV
+    grip.forcerange = [-robot.GRIPPER_MAX_FORCE, robot.GRIPPER_MAX_FORCE]
+
     vis = spec.visual
     vis.global_.offheight = max(image_size[0], 480)
     vis.global_.offwidth = max(image_size[1], 640)

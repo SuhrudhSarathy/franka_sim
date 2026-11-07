@@ -3,6 +3,7 @@ import pytest
 
 import franka_sim
 from franka_sim import robot
+from franka_sim.tasks import objects
 from franka_sim.tasks import TASKS
 
 BACKENDS = ["cpu"]
@@ -37,9 +38,9 @@ def test_objects_at_rest(task, backend):
     assert not info["success"].any()
     if task == "hammer_nails":
         assert np.abs(obs["nail_depth"]).max() < 0.05
-        assert np.abs(obs["hammer_pos"][:, 2] - 0.045).max() < 0.005
+        assert np.abs(obs["hammer_pos"][:, 2] - objects.HAMMER_HANDLE_Z).max() < 0.005
     if task == "peg_insertion":
-        assert np.abs(obs["peg_pos"].reshape(2, -1, 3)[..., 2] - 0.045).max() < 0.005
+        assert np.abs(obs["peg_pos"].reshape(2, -1, 3)[..., 2] - objects.PEG_HALF[2]).max() < 0.005
     env.close()
 
 
@@ -48,7 +49,7 @@ def test_conditioning_options():
     obs, info = env.reset(options={"target": 2})
     assert (info["cond_target"] == 2).all()
     np.testing.assert_allclose(obs["target_onehot"], np.tile([0, 0, 1, 0], (3, 1)))
-    assert env.instructions()[0] == "pick up the hammer and hit the blue nail"
+    assert env.instructions()[0] == "pick up the hammer and hit the third nail from the left"
     obs, info = env.reset(env_ids=[1], options={"target": 0})
     assert info["cond_target"].tolist() == [2, 0, 2]
 
@@ -73,4 +74,20 @@ def test_press_button_with_gripper(backend):
         pressed |= bool(info["success"][0])
     assert pressed
     assert not info["failed"][0]
+    env.close()
+
+
+def test_nail_layout_randomized_and_ordered():
+    env = franka_sim.make("hammer_nails", num_envs=3, seed=0)
+    obs, _ = env.reset()
+    nails = obs["nail_pos"].reshape(3, -1, 3)
+    # Different layouts across envs, not just a shifted copy of one row.
+    rel = nails[..., :2] - nails[:, :1, :2]
+    assert np.abs(rel[0] - rel[1]).max() > 0.01
+    # Index order = left to right from the robot (decreasing y), nails well separated.
+    assert (np.diff(nails[..., 1], axis=1) < 0).all()
+    d = np.linalg.norm(nails[:, :, None, :2] - nails[:, None, :, :2], axis=-1) + np.eye(4) * 9
+    assert d.min() >= 0.075 - 1e-9
+    obs2, _ = env.reset()
+    assert np.abs(obs2["nail_pos"] - obs["nail_pos"]).max() > 0.01
     env.close()
