@@ -1,0 +1,33 @@
+[project]
+name = "franka-sim"
+version = "0.1.0"
+description = "Franka Panda simulator on MuJoCo (CPU) and MuJoCo Warp for behavior cloning"
+readme = "README.md"
+authors = [
+    { name = "Suhrudh", email = "suhrudhsarathy@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium>=1.4.0",
+    "h5py>=3.16.0",
+    "mujoco>=3.3",
+    "numpy>=2.5.4",
+]
+
+[project.optional-dependencies]
+warp = [
+    "mujoco-warp>=4.0",
+]
+video = [
+    "imageio>=2.38.1",
+    "imageio-ffmpeg>=0.8.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
