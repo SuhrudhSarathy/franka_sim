@@ -178,6 +178,39 @@ sample = ds[0]   # {"obs/rgb_wrist": (2,128,128,3) uint8, "actions": (16, 8), "c
 # works directly with torch.utils.data.DataLoader; ds.stats() gives normalization statistics
 ```
 
+## LeRobot datasets
+
+```sh
+uv sync --extra lerobot
+
+# record ~50 scripted demos per task and convert each into a LeRobot (v3) dataset
+uv run --extra lerobot python scripts/build_datasets.py --namespace <hf-user> --episodes 50
+
+# or convert your own recordings
+uv run --extra lerobot python scripts/to_lerobot.py data/hammer_nails.hdf5 \
+    --repo-id <hf-user>/franka_sim_hammer_nails --root lerobot_data/hammer_nails --cameras front wrist
+
+# upload (after `hf auth login`)
+uv run --extra lerobot python scripts/to_lerobot.py --push --repo-id <hf-user>/franka_sim_hammer_nails \
+    --root lerobot_data/hammer_nails
+```
+
+| key | shape | content |
+|---|---|---|
+| `observation.state` | 8 | 7 joint positions + gripper width |
+| `observation.ee_pose` | 7 | end-effector xyz + quaternion (wxyz) |
+| `observation.environment_state` | task-specific | privileged object state; names in `meta/info.json` |
+| `observation.images.{front,wrist}` | 256×256×3 video | re-rendered from the recorded simulator states |
+| `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper) |
+| `action.joint_pos`, `action.ee_pose` | 8 | both action representations |
+| `cond.*` | | episode conditioning, e.g. `cond.target` (nail / peg / connector index), `cond.targets` (order) |
+| `next.reward`, `next.success`, `next.done` | 1 | |
+| `task` | string | language instruction, e.g. "pick up the hammer and hit the leftmost nail" |
+
+Demos are recorded as low-dimensional data plus simulator states, so recording is fast. Cameras
+are rendered at conversion time, which means any camera set and resolution can be exported from the
+same recording without simulating again.
+
 ## Layout
 
 ```
@@ -191,7 +224,8 @@ src/franka_sim/
   policies/         scripted experts
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)
-scripts/            record_demos.py, replay.py, make_videos.py, benchmark.py
+  lerobot_export.py HDF5 demos -> LeRobot dataset
+scripts/            record_demos.py, replay.py, make_videos.py, to_lerobot.py, build_datasets.py, benchmark.py
 ```
 
 The Panda model is `mjx_panda.xml` from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
