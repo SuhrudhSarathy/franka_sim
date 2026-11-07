@@ -10,6 +10,25 @@ import numpy as np
 from franka_sim.backends.base import Backend
 
 
+def yaw_quat(yaw) -> np.ndarray:
+    """Quaternion(s) (wxyz) for rotation(s) about world z."""
+    yaw = np.asarray(yaw, dtype=float)
+    return np.stack([np.cos(yaw / 2), np.zeros_like(yaw), np.zeros_like(yaw), np.sin(yaw / 2)], axis=-1)
+
+
+def sample_separated(rng: np.random.Generator, n: int, low, high, min_dist: float, tries: int = 1000) -> np.ndarray:
+    """Sample ``n`` 2D points uniformly in a box, at least ``min_dist`` apart (rejection sampling)."""
+    low, high = np.asarray(low, dtype=float), np.asarray(high, dtype=float)
+    pts: list[np.ndarray] = []
+    for _ in range(tries):
+        p = rng.uniform(low, high)
+        if all(np.linalg.norm(p - q) >= min_dist for q in pts):
+            pts.append(p)
+            if len(pts) == n:
+                return np.array(pts)
+    raise RuntimeError(f"could not place {n} points {min_dist} apart in {low}..{high}")
+
+
 @dataclass
 class Evaluation:
     reward: np.ndarray  # (N,) float

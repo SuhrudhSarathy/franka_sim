@@ -73,3 +73,19 @@ env = franka_sim.make("reach", num_envs=4096, backend="warp",
 * Physics agrees with the CPU backend to float32 precision (see `tests/test_warp.py`).
 
 Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp --num-envs 1 64 1024`.
+
+## Tasks
+
+| task | objects | conditioning (`info["cond_*"]`, `reset(options=...)`) | success |
+|---|---|---|---|
+| `reach` | mocap target sphere | `goal_pos` | gripper within 2 cm of the goal |
+| `hammer_nails` | hammer on a stand, board with 4 colored nails on friction slide joints | `target` nail index | target nail driven ≥ 75 %, no other nail > 25 % |
+| `peg_insertion` | 3 colored square pegs (random position and yaw), receptacle with 3 matching holes | `target` peg index (`mode="single"`), or `mode="all"` | target peg (or every peg) seated in its hole |
+| `buttons` | panel with 4 colored spring-loaded buttons | `sequence` of buttons (`sequence_length` ≥ 1, or `target`) | buttons pressed in order; a wrong press fails the episode |
+
+Each task has a language instruction per env (`env.instructions()`), for example "pick up the hammer
+and hit the blue nail". Pass task options as `franka_sim.make("buttons", task_kwargs={"sequence_length": 2})`.
+All assets are made from primitive geoms. The fixtures (nail board, receptacle, button panel) are
+mocap bodies, so they can be placed independently in every world on both backends.
+To add your own task, subclass `franka_sim.Task` (`build`, `bind`, `reset`, `observe`, `evaluate`)
+and call `franka_sim.register_task`.

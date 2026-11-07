@@ -22,6 +22,9 @@ ROBOT_BODIES = (
 # The "ready" pose: gripper pointing straight down above the workspace.
 HOME_QPOS = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
 
+# The ``gripper`` site sits between the finger pads; the fingertips reach this far below it.
+FINGERTIP_OFFSET = 0.012
+
 # Finger joint range is [0, 0.04] per finger; the gripper actuator commands one finger,
 # an equality constraint mirrors the other.
 FINGER_MAX = 0.04
