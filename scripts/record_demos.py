@@ -5,7 +5,7 @@ Examples:
     uv run python scripts/record_demos.py --task hammer_nails --episodes 40 --condition balanced \
         --cameras front wrist --out data/hammer.hdf5
 
-    # Only episodes that hit the blue nail (index 2)
+    # Only episodes that hit the third nail from the left (index 2)
     uv run python scripts/record_demos.py --task hammer_nails --episodes 10 --condition target=2
 
     # Two-button sequences on 8 parallel envs

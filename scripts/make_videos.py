@@ -16,21 +16,11 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 import franka_sim
+from franka_sim.benchmark import SUITE
 from franka_sim.policies import make_policy
 
-# name -> (task, task_kwargs)
-ENVS = {
-    "reach": ("reach", {}),
-    "hammer_nails": ("hammer_nails", {}),
-    "peg_insertion": ("peg_insertion", {}),
-    "peg_insertion_all": ("peg_insertion", {"mode": "all"}),
-    "buttons": ("buttons", {}),
-    "buttons_sequence": ("buttons", {"sequence_length": 3}),
-    "gear_assembly": ("gear_assembly", {}),
-    "kitting": ("kitting", {}),
-    "kitting_all": ("kitting", {"mode": "all"}),
-    "pcb_insertion": ("pcb_insertion", {}),
-}
+# name -> (task, task_kwargs): reach plus every benchmark task
+ENVS = {"reach": ("reach", {}), **{name: (name, {}) for name in SUITE}}
 
 
 def overlay(frame: np.ndarray, lines: list[str]) -> np.ndarray:

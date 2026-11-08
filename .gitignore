@@ -9,3 +9,5 @@ videos/
 *.hdf5
 *.mp4
 lerobot_data/
+results/
+.DS_Store

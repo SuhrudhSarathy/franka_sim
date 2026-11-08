@@ -1,6 +1,6 @@
 """Record scripted demos for every task and convert each to a LeRobot dataset.
 
-    uv run --extra lerobot python scripts/build_datasets.py                       # everything
+    uv run --extra lerobot python scripts/build_datasets.py                       # the whole suite
     uv run --extra lerobot python scripts/build_datasets.py --tasks hammer_nails --episodes 100
     uv run --extra lerobot python scripts/build_datasets.py --namespace <hf-user> --jobs 4
 
@@ -16,16 +16,11 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-# name -> (task, task_kwargs, balanced condition: number of targets to cycle through, or None)
-DATASETS = {
-    "reach": ("reach", {}, None),
-    "hammer_nails": ("hammer_nails", {}, 4),
-    "buttons_sequence": ("buttons", {"sequence_length": 2}, None),
-    "peg_insertion": ("peg_insertion", {}, 3),
-    "gear_assembly": ("gear_assembly", {}, None),
-    "kitting": ("kitting", {}, None),
-    "pcb_insertion": ("pcb_insertion", {}, 3),
-}
+from franka_sim.benchmark import EVAL_SEED, SUITE
+
+# name -> (task, task_kwargs, balanced condition: number of targets to cycle through, or None).
+# One dataset per benchmark task; single tasks cycle their target so every target is equally common.
+DATASETS = {name: (name, {}, n or None) for name, (_kind, n) in SUITE.items()}
 
 
 def build(name: str, episodes: int, namespace: str, cameras: list[str], image_size: tuple[int, int],
@@ -70,6 +65,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
+    if args.seed + 10 * args.episodes >= EVAL_SEED:
+        raise SystemExit(f"--seed must stay well below the evaluation seeds ({EVAL_SEED})")
 
     kw = dict(episodes=args.episodes, namespace=args.namespace, cameras=args.cameras,
               image_size=tuple(args.image_size), num_envs=args.num_envs, seed=args.seed, overwrite=args.overwrite)

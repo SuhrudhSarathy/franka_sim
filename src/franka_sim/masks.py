@@ -39,4 +39,9 @@ def render_mask(renderer: mujoco.Renderer, data: mujoco.MjData, camera: str | in
     finally:
         renderer.disable_segmentation_rendering()
         model.geom_group[geoms] = saved
-    return (seg[..., 1] == mujoco.mjtObj.mjOBJ_GEOM) & np.isin(seg[..., 0], geoms)
+    # Compare with a plain int: comparing an array with the pybind enum is an elementwise Python
+    # call (~30 ms per 256x256 image).
+    is_target = np.zeros(model.ngeom + 1, dtype=bool)
+    is_target[geoms] = True
+    ids = np.where(seg[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM), seg[..., 0], model.ngeom)
+    return is_target[ids]
