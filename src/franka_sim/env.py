@@ -155,6 +155,10 @@ class FrankaEnv:
         info = self._info()
         info.update(ev.info)
         info["success"] = ev.success
+        # Benchmark metrics every task reports: sub-goals done (0..task.num_steps) and whether a
+        # target other than the requested one(s) was acted on (language adherence).
+        info.setdefault("progress", ev.success.astype(np.int64))
+        info.setdefault("wrong_target", np.zeros(self.num_envs, dtype=bool))
         truncated = self.elapsed_steps >= self.max_episode_steps
         terminated = ev.success.copy()
         return obs, ev.reward, terminated, truncated, info

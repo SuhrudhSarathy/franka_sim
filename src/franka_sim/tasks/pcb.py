@@ -84,6 +84,19 @@ class PCBInsertionTask(InsertionTask):
         inserted = (xy_err < self.xy_tol) & (pos[..., 2] - goals[..., 2] < self.z_tol)
         return pos, goals, inserted
 
+    def evaluate(self, sim):
+        ev = super().evaluate(sim)
+        # Wrong target: the card seated in another connector.
+        pos = sim.read("xpos")[:, self.obj_bodies[0]]
+        goals = sim.read("site_xpos")[:, self.slot_goals]
+        seated = ((np.linalg.norm(pos[:, None, :2] - goals[..., :2], axis=-1) < self.xy_tol)
+                  & (pos[:, None, 2] - goals[..., 2] < self.z_tol))
+        seated[np.arange(sim.num_envs), self.slot] = False
+        wrong = seated.any(axis=1)
+        ev.info["wrong_target"] = wrong
+        ev.success = ev.success & ~wrong
+        return ev
+
     def observe(self, sim):
         out = super().observe(sim)
         out["slot_pos"] = sim.read("site_xpos")[:, self.slot_goals].reshape(sim.num_envs, -1)

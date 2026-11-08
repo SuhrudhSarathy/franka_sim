@@ -88,6 +88,11 @@ class Task:
         """Per-env conditioning variables (e.g. target index), each ``(N, ...)``."""
         return {}
 
+    @property
+    def num_steps(self) -> int:
+        """Number of sub-goals per episode (1 for single-target tasks; nails, objects... for long ones)."""
+        return 1
+
     def mask_bodies(self, cond: dict) -> list[str] | None:
         """Bodies forming the target entity of one episode with conditioning ``cond`` (one env's
         values of ``conditioning()``), for target masks. ``None``: the task has no single target."""

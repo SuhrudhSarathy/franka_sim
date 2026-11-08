@@ -74,7 +74,7 @@ def test_press_button_with_gripper(backend):
         obs, reward, term, trunc, info = env.step(action)
         pressed |= bool(info["success"][0])
     assert pressed
-    assert not info["failed"][0]
+    assert not info["wrong_target"][0]
     env.close()
 
 
@@ -95,7 +95,7 @@ def test_nail_layout_randomized_and_ordered():
 
 
 def test_insertion_conditioning():
-    env = franka_sim.make("kitting", num_envs=2, seed=0)
+    env = franka_sim.make("kitting", num_envs=2, seed=0, task_kwargs={"mode": "subset"})
     obs, info = env.reset(options={"targets": [3, 1]})
     assert info["cond_targets"].tolist() == [[3, 1], [3, 1]]
     np.testing.assert_allclose(obs["targets_mask"][0], [0, 1, 0, 1])
@@ -135,6 +135,8 @@ def test_start_pose_fixed_when_disabled():
     ("pcb_insertion", {}, "motherboard_conn{}"),
     ("peg_insertion", {}, "peg{}"),
     ("buttons", {}, "button{}"),
+    ("gear_assembly", {}, "gear{}"),
+    ("kitting", {}, "part{}"),
 ])
 def test_target_mask(task, kwargs, body):
     env = franka_sim.make(task, num_envs=3, seed=1, task_kwargs=kwargs, image_size=(128, 128))
@@ -149,10 +151,65 @@ def test_target_mask(task, kwargs, body):
 
 
 @pytest.mark.parametrize("task,kwargs", [
-    ("gear_assembly", {}), ("kitting", {}), ("buttons", {"sequence_length": 2}), ("reach", {}),
+    ("gear_assembly_long", {}), ("kitting", {"mode": "subset"}), ("buttons", {"sequence_length": 2}), ("reach", {}),
 ])
 def test_no_mask_for_multi_step_tasks(task, kwargs):
     env = franka_sim.make(task, task_kwargs=kwargs)
     env.reset()
     assert env.render_target_mask() is None
     env.close()
+
+
+SINGLE = ["hammer_nails", "buttons", "peg_insertion", "gear_assembly", "kitting", "pcb_insertion"]
+LONG = ["hammer_nails_long", "buttons_long", "peg_insertion_long", "gear_assembly_long", "kitting_long"]
+
+
+@pytest.mark.parametrize("task", SINGLE)
+def test_single_variants(task):
+    env = franka_sim.make(task, num_envs=4, seed=0)
+    _, info = env.reset()
+    assert env.task.num_steps == 1 and "cond_target" in info
+    assert env.max_episode_steps == franka_sim.tasks.HORIZONS[task]
+    _, _, _, _, info = env.step(np.zeros((4, env.action_dim)))
+    assert info["progress"].shape == (4,) and not info["wrong_target"].any()
+    env.close()
+
+
+@pytest.mark.parametrize("task", LONG)
+def test_long_variants(task):
+    env = franka_sim.make(task, num_envs=8, seed=0)
+    _, info = env.reset()
+    order = info["cond_order"]
+    assert env.task.num_steps == order.shape[1] > 1
+    # The order is a random permutation per episode, but the instruction does not depend on it.
+    assert all(sorted(o) == list(range(order.shape[1])) for o in order.tolist())
+    assert len({tuple(o) for o in order.tolist()}) > 1
+    assert len(set(env.instructions())) == 1
+    assert env.render_target_mask() is None
+    env.close()
+
+
+def test_buttons_long_any_order():
+    from franka_sim.tasks import objects as obj
+
+    env = franka_sim.make("buttons_long", seed=0)
+    env.reset(options={"order": [0, 1, 2, 3]})
+    qpos = env.sim.read("qpos")
+    for k, b in enumerate([3, 1, 0, 2]):  # press in a different order than the sampled one
+        qpos[0, env.task.button_qadr[b]] = -obj.BUTTON_TRAVEL
+        env.sim.write("qpos", qpos)
+        ev = env.task.evaluate(env.sim)
+        assert ev.info["progress"][0] == k + 1 and not ev.info["wrong_target"][0]
+    assert ev.success[0]
+
+
+def test_wrong_target_reported():
+    from franka_sim.tasks import objects as obj
+
+    env = franka_sim.make("hammer_nails", seed=0)
+    env.reset(options={"target": 0})
+    qpos = env.sim.read("qpos")
+    qpos[0, env.task.nail_qadr[2]] = -obj.NAIL_TRAVEL  # drive a different nail
+    env.sim.write("qpos", qpos)
+    ev = env.task.evaluate(env.sim)
+    assert ev.info["wrong_target"][0] and not ev.success[0]

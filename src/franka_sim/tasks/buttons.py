@@ -1,4 +1,4 @@
-"""Press colored buttons on a panel, either one target or a target sequence."""
+"""Press colored buttons on a panel: one target, an ordered sequence, or a set in any order."""
 
 from __future__ import annotations
 
@@ -15,9 +15,13 @@ class ButtonPressTask(Task):
 
     The sequence is sampled per episode, or set with ``options={"sequence": [2, 0]}`` (or
     ``{"target": i}`` when ``sequence_length == 1``). Pressing a button that is not next in the
-    sequence fails the episode (``info["failed"]``).
+    sequence fails the episode (``info["wrong_target"]``).
 
-    Observations: ``button_pos`` (top of each cap, flattened), ``button_depth`` (0 = up, 1 = fully
+    With ``ordered=False`` (``buttons_long``: all four buttons) any order succeeds: every requested
+    button counts once it is pressed, and pressing an unrequested one fails the episode. The
+    sampled ``sequence`` is then only the order the scripted expert follows (``cond_order``).
+
+    Observations: ``button_done`` (0/1 per button: pressed and counted), ``button_pos`` (top of each cap, flattened), ``button_depth`` (0 = up, 1 = fully
     pressed), ``sequence_onehot`` (sequence_length * num_buttons), ``progress`` (buttons done so far),
     ``next_button_pos``.
     """
@@ -25,11 +29,12 @@ class ButtonPressTask(Task):
     name = "buttons"
 
     def __init__(self, num_buttons: int = 4, sequence_length: int = 1, press_depth: float = 0.7,
-                 randomize: bool = True):
+                 randomize: bool = True, ordered: bool = True):
         if not 1 <= sequence_length <= num_buttons:
             raise ValueError("sequence_length must be between 1 and num_buttons")
         self.num_buttons = num_buttons
         self.sequence_length = sequence_length
+        self.ordered = ordered
         self.press_depth = press_depth
         self.randomize = randomize
         self.max_episode_steps = 80 + 70 * sequence_length
@@ -46,13 +51,14 @@ class ButtonPressTask(Task):
         self.progress = np.zeros(num_envs, dtype=np.int64)
         self.failed = np.zeros(num_envs, dtype=bool)
         self.was_pressed = np.zeros((num_envs, self.num_buttons), dtype=bool)
+        self.done = np.zeros((num_envs, self.num_buttons), dtype=bool)
 
     def reset(self, env_ids, qpos, rng, options=None):
         options = options or {}
         n = len(env_ids)
         for k, e in enumerate(env_ids):
-            if "sequence" in options:
-                self.sequence[e] = options["sequence"]
+            if "sequence" in options or "order" in options:
+                self.sequence[e] = options.get("sequence", options.get("order"))
             elif "target" in options:
                 self.sequence[e] = [options["target"]]
             else:
@@ -60,6 +66,7 @@ class ButtonPressTask(Task):
         self.progress[env_ids] = 0
         self.failed[env_ids] = False
         self.was_pressed[env_ids] = False
+        self.done[env_ids] = False
         mocap = self.default_mocap_pos(n)
         quat = self.default_mocap_quat(n)
         if self.randomize:
@@ -73,8 +80,11 @@ class ButtonPressTask(Task):
         return -sim.read("qpos")[:, self.button_qadr] / obj.BUTTON_TRAVEL
 
     def _next(self) -> np.ndarray:
-        idx = np.minimum(self.progress, self.sequence_length - 1)
-        return self.sequence[np.arange(self.num_envs), idx]
+        """Next button of ``sequence`` that is not done (the last one once all are)."""
+        idx = np.arange(self.num_envs)
+        done = self.done[idx[:, None], self.sequence]
+        first = np.where(done.all(axis=1), self.sequence_length - 1, np.argmax(~done, axis=1))
+        return self.sequence[idx, first]
 
     def observe(self, sim: Backend):
         site = sim.read("site_xpos")[:, self.button_sites]
@@ -82,6 +92,7 @@ class ButtonPressTask(Task):
         return {
             "button_pos": site.reshape(self.num_envs, -1),
             "button_depth": self.depth(sim),
+            "button_done": self.done.astype(np.float64),
             "sequence_onehot": onehot,
             "progress": self.progress[:, None].astype(np.float64),
             "next_button_pos": site[np.arange(self.num_envs), self._next()],
@@ -93,25 +104,42 @@ class ButtonPressTask(Task):
         self.was_pressed = pressed
         for e in np.flatnonzero(new.any(axis=1)):
             for b in np.flatnonzero(new[e]):
-                if self.progress[e] < self.sequence_length and b == self.sequence[e, self.progress[e]]:
+                if self.progress[e] >= self.sequence_length or self.done[e, b]:
+                    continue
+                expected = b == self.sequence[e, self.progress[e]] if self.ordered else b in self.sequence[e]
+                if expected:
+                    self.done[e, b] = True
                     self.progress[e] += 1
-                elif self.progress[e] < self.sequence_length:
+                else:
                     self.failed[e] = True
         success = (self.progress >= self.sequence_length) & ~self.failed
         reward = self.progress / self.sequence_length - self.failed.astype(np.float64)
         return Evaluation(reward, success, {"button_depth": np.clip(self.depth(sim), 0, 1),
-                                            "progress": self.progress.copy(), "failed": self.failed.copy()})
+                                            "progress": self.progress.copy(), "wrong_target": self.failed.copy()})
 
     def conditioning(self):
+        if not self.ordered:
+            return {"order": self.sequence.copy()}
+        if self.sequence_length == 1:
+            return {"target": self.sequence[:, 0].copy()}
         return {"sequence": self.sequence.copy()}
+
+    @property
+    def num_steps(self) -> int:
+        """Sub-goals per episode (buttons to press)."""
+        return self.sequence_length
 
     def mask_bodies(self, cond):
         if self.sequence_length != 1:
             return None  # multi-step: no mask
-        return [f"button{int(np.ravel(cond['sequence'])[0])}"]
+        return [f"button{int(np.ravel(cond['target'])[0])}"]
 
     def instruction(self, env_id):
         colors = [obj.COLOR_NAMES[b % len(obj.COLOR_NAMES)] for b in self.sequence[env_id]]
+        if not self.ordered:
+            if self.sequence_length == self.num_buttons:
+                return "press all the buttons"
+            return "press the " + ", ".join(sorted(colors)) + " buttons, in any order"
         if len(colors) == 1:
             return f"press the {colors[0]} button"
         return "press the " + ", then the ".join(colors) + " buttons in order"

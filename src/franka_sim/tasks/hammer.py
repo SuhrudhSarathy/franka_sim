@@ -1,4 +1,4 @@
-"""Pick up a hammer and drive one selected nail (out of several) into a board."""
+"""Pick up a hammer and drive one selected nail (out of several) into a board, or all of them."""
 
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ class HammerNailsTask(Task):
     succeeds when the target nail is driven in (depth >= ``success_depth``) and no other nail is
     driven past ``wrong_depth``.
 
+    With ``long=True`` (registered as ``hammer_nails_long``) every nail must be driven, in any order.
+    Each episode still samples an order (``order``, a permutation; ``options={"order": [...]}``),
+    which the scripted expert follows and the recording keeps, but success ignores it. The
+    observations ``target_onehot`` / ``target_nail_pos`` then point at the next nail of that order
+    that is not driven yet.
+
     Observations: ``hammer_pos``, ``hammer_quat``, ``hammer_grip_pos``, ``hammer_face_pos``,
     ``nail_pos`` (num_nails*3, top of each head), ``nail_depth`` (num_nails, 0 = up, 1 = driven),
     ``target_onehot``, ``target_nail_pos``.
@@ -30,8 +36,10 @@ class HammerNailsTask(Task):
     max_episode_steps = 300
 
     def __init__(self, num_nails: int = 4, success_depth: float = 0.75, wrong_depth: float = 0.25,
-                 nail_frictionloss: float = 6.0, min_nail_dist: float = 0.075, randomize: bool = True):
+                 nail_frictionloss: float = 6.0, min_nail_dist: float = 0.075, randomize: bool = True,
+                 long: bool = False):
         self.num_nails = num_nails
+        self.long = long
         self.success_depth = success_depth
         self.wrong_depth = wrong_depth
         self.nail_frictionloss = nail_frictionloss
@@ -55,6 +63,7 @@ class HammerNailsTask(Task):
         self.nail_qadr = np.array([self.joint_qadr(f"nail{i}_joint") for i in range(self.num_nails)])
         self.nail_sites = np.array([model.site(f"nail{i}_top").id for i in range(self.num_nails)])
         self.target = np.zeros(num_envs, dtype=np.int64)
+        self.order = np.tile(np.arange(self.num_nails), (num_envs, 1))
 
     def reset(self, env_ids, qpos, rng, options=None):
         options = options or {}
@@ -77,6 +86,8 @@ class HammerNailsTask(Task):
         if "target" in options:
             target[:] = options["target"]
         self.target[env_ids] = target
+        for e in np.atleast_1d(env_ids):
+            self.order[e] = options["order"] if "order" in options else rng.permutation(self.num_nails)
 
         a = self.hammer_qadr
         qpos[:, a:a + 2] = hammer_xy
@@ -108,10 +119,20 @@ class HammerNailsTask(Task):
     def nail_depth(self, sim: Backend) -> np.ndarray:
         return -sim.read("qpos")[:, self.nail_qadr] / obj.NAIL_TRAVEL
 
+    def current_target(self, depth: np.ndarray) -> np.ndarray:
+        """Nail to work on now: the target, or (long) the next nail of ``order`` not driven yet."""
+        if not self.long:
+            return self.target
+        idx = np.arange(len(depth))
+        done = depth[idx[:, None], self.order] >= self.success_depth
+        first = np.where(done.all(axis=1), self.num_nails - 1, np.argmax(~done, axis=1))
+        return self.order[idx, first]
+
     def observe(self, sim: Backend):
         xpos, xquat, site = sim.read("xpos"), sim.read("xquat"), sim.read("site_xpos")
         nails = site[:, self.nail_sites]
         idx = np.arange(sim.num_envs)
+        target = self.current_target(self.nail_depth(sim))
         return {
             "hammer_pos": xpos[:, self.hammer_body],
             "hammer_quat": xquat[:, self.hammer_body],
@@ -119,28 +140,45 @@ class HammerNailsTask(Task):
             "hammer_face_pos": site[:, self.face_site],
             "nail_pos": nails.reshape(sim.num_envs, -1),
             "nail_depth": self.nail_depth(sim),
-            "target_onehot": np.eye(self.num_nails)[self.target],
-            "target_nail_pos": nails[idx, self.target],
+            "target_onehot": np.eye(self.num_nails)[target],
+            "target_nail_pos": nails[idx, target],
         }
 
     def evaluate(self, sim: Backend) -> Evaluation:
         depth = np.clip(self.nail_depth(sim), 0.0, 1.0)
         idx = np.arange(sim.num_envs)
+        if self.long:
+            driven = depth >= self.success_depth
+            return Evaluation(depth.mean(axis=1), driven.all(axis=1),
+                              {"nail_depth": depth, "progress": driven.sum(axis=1),
+                               "wrong_target": np.zeros(sim.num_envs, dtype=bool)})
         target_depth = depth[idx, self.target]
         others = depth.copy()
         others[idx, self.target] = 0.0
         wrong = others.max(axis=1) > self.wrong_depth
         success = (target_depth >= self.success_depth) & ~wrong
         reward = target_depth - others.sum(axis=1)
-        return Evaluation(reward, success, {"nail_depth": depth, "wrong_nail": wrong})
+        return Evaluation(reward, success, {"nail_depth": depth, "wrong_target": wrong,
+                                            "progress": (target_depth >= self.success_depth).astype(np.int64)})
 
     def conditioning(self):
+        if self.long:
+            return {"order": self.order.copy()}
         return {"target": self.target.copy()}
 
+    @property
+    def num_steps(self) -> int:
+        """Sub-goals per episode (nails to drive)."""
+        return self.num_nails if self.long else 1
+
     def mask_bodies(self, cond):
+        if self.long:
+            return None  # multi-step: no mask
         return [f"nail{int(np.ravel(cond['target'])[0])}"]
 
     def instruction(self, env_id):
+        if self.long:
+            return "pick up the hammer and hit all the nails"
         k = int(self.target[env_id])
         if k == 0:
             which = "leftmost nail"

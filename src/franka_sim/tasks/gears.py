@@ -16,8 +16,9 @@ class GearAssemblyTask(InsertionTask):
     """Pick gears lying flat on the table and slide each onto its own shaft (bore clearance 3 mm).
 
     Gears differ in size and finish (brass, steel, dark steel); shaft ``i`` fits gear ``i`` and the
-    shafts are spaced so the assembled gears mesh. Default ``mode="all"``: assemble every gear in a
-    random order (``targets`` condition). See ``InsertionTask`` for modes and observations.
+    shafts are spaced so the assembled gears mesh. Default ``mode="single"``: one gear, chosen by the
+    condition; ``gear_assembly_long`` (``mode="all"``) assembles every gear in any order. See
+    ``InsertionTask`` for modes and observations.
     """
 
     name = "gear_assembly"
@@ -33,7 +34,9 @@ class GearAssemblyTask(InsertionTask):
     tip_offset = (0.0, 0.0, 0.0)
     grasp_width = tuple(2 * (r - 0.002) for r in GEAR_RADII)
 
-    def __init__(self, mode: str = "all", num_targets: int = 2, randomize: bool = True):
+    long_instruction = "put all the gears on their shafts"
+
+    def __init__(self, mode: str = "single", num_targets: int = 2, randomize: bool = True):
         super().__init__(mode, num_targets, randomize)
 
     def build(self, spec):

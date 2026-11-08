@@ -23,7 +23,12 @@ class ReachPolicy(ScriptedPolicy):
 
 
 class HammerPolicy(ScriptedPolicy):
-    """Grasp the hammer handle, lift, hover the head over the target nail, strike until it is driven."""
+    """Grasp the hammer handle, lift, hover the head over the target nail, strike until it is driven.
+
+    The nail to hit comes from ``target_onehot``; in ``hammer_nails_long`` that is the next nail
+    (of the episode's order) not driven yet, so the expert keeps the hammer and works through every
+    nail. Each nail gets at most ``max_strikes`` strikes.
+    """
 
     def __init__(self, env, max_strikes: int = 4, strike_speed: float = 0.035, **kwargs):
         super().__init__(env, **kwargs)
@@ -40,7 +45,7 @@ class HammerPolicy(ScriptedPolicy):
         if "yaw" not in mem:
             mem["yaw"] = float(wrap_angle(quat_yaw(obs["hammer_quat"][i]), np.pi))
             mem["hover"] = 0.07 + self.rng.uniform(-0.01, 0.02)
-            mem["strikes"] = 0
+            mem["strikes"] = {}  # nail index -> strikes so far
         yaw = mem["yaw"]
 
         if stage == 0:  # above the handle
@@ -60,19 +65,22 @@ class HammerPolicy(ScriptedPolicy):
             t = Target(ee + (desired - face), yaw, CLOSED)
             done = np.linalg.norm(desired - face) < 0.008 and self.timer[i] > 5
             if done:
+                mem["aim"] = target_idx
                 mem["strike_from"] = self.cmd_pos[i].copy()
                 mem["strike_dz"] = (nail[2] - obj.NAIL_TRAVEL - 0.01) - face[2]
             return t, done
         if stage == 5:  # strike: drive the face down past the nail's travel
             t = Target(mem["strike_from"] + mem["strike_dz"] * UP, yaw, CLOSED, speed=self.strike_speed)
-            depth = obs["nail_depth"][i][target_idx]
+            depth = obs["nail_depth"][i][mem["aim"]]
             return t, self.timer[i] >= 14 or depth >= 0.97
         if stage == 6:  # raise, then strike again if needed
             t = Target(mem["strike_from"].copy(), yaw, CLOSED)
             if not self.reached(i, t):
                 return t, False
-            mem["strikes"] += 1
-            if obs["nail_depth"][i][target_idx] < self.success_depth and mem["strikes"] < self.max_strikes:
+            mem["strikes"][mem["aim"]] = mem["strikes"].get(mem["aim"], 0) + 1
+            # target_idx is the nail still to drive: the same one, or (long task) the next nail.
+            if (obs["nail_depth"][i][target_idx] < self.success_depth
+                    and mem["strikes"].get(target_idx, 0) < self.max_strikes):
                 self.stage[i] = 3  # -> advances to stage 4 (re-aim) on return
             return t, True
         mem["finished"] = True
@@ -179,17 +187,17 @@ class InsertionPolicy(ScriptedPolicy):
 
 
 class ButtonPolicy(ScriptedPolicy):
-    """Press the buttons of the sequence in order with closed fingers."""
+    """Press the buttons of the sequence in order with closed fingers (the first one not done yet)."""
 
     def plan(self, i, obs, stage):
         mem = self.memory[i]
         nb = len(obs["button_depth"][i])
         seq = np.argmax(obs["sequence_onehot"][i].reshape(-1, nb), axis=1)
-        progress = int(obs["progress"][i][0])
-        if progress >= len(seq) and stage == 0:
+        todo = [b for b in seq if obs["button_done"][i][b] < 0.5]
+        if not todo and stage == 0:
             mem["finished"] = True
             return Target(self.cmd_pos[i].copy(), 0.0, CLOSED), False
-        b = seq[min(progress, len(seq) - 1)] if stage == 0 or "button" not in mem else mem["button"]
+        b = todo[0] if stage == 0 or "button" not in mem else mem["button"]
         top = obs["button_pos"][i].reshape(-1, 3)[b]
         if stage == 0:
             mem["button"] = b
@@ -208,24 +216,14 @@ class ButtonPolicy(ScriptedPolicy):
         return Target(self.cmd_pos[i].copy(), 0.0, CLOSED), False
 
 
-POLICIES = {
-    "reach": ReachPolicy,
-    "hammer_nails": HammerPolicy,
-    "peg_insertion": InsertionPolicy,
-    "gear_assembly": InsertionPolicy,
-    "kitting": InsertionPolicy,
-    "pcb_insertion": InsertionPolicy,
-    "buttons": ButtonPolicy,
-}
-
-
 def make_policy(env, **kwargs) -> ScriptedPolicy:
-    """The scripted expert for ``env.task``."""
-    from franka_sim.tasks.insertion import InsertionTask
+    """The scripted expert for ``env.task`` (chosen by task class, so variants share experts)."""
+    from franka_sim.tasks import ButtonPressTask, HammerNailsTask, InsertionTask, ReachTask
 
-    cls = POLICIES.get(env.task.name)
-    if cls is None and isinstance(env.task, InsertionTask):
-        cls = InsertionPolicy
-    if cls is None:
+    for task_cls, cls in ((ReachTask, ReachPolicy), (HammerNailsTask, HammerPolicy),
+                          (ButtonPressTask, ButtonPolicy), (InsertionTask, InsertionPolicy)):
+        if isinstance(env.task, task_cls):
+            break
+    else:
         raise ValueError(f"no scripted policy for task {env.task.name!r}")
     return cls(env, **kwargs)

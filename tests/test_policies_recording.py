@@ -93,7 +93,7 @@ def test_bc_dataset_windows(tmp_path):
     assert s["obs/ee_pos"].shape == (2, 3)
     np.testing.assert_allclose(s["obs/ee_pos"][0], s["obs/ee_pos"][1])  # padded at episode start
     assert s["actions"].shape == (8, 8)
-    assert s["cond/sequence"].shape == (1,)
+    assert s["cond/target"].shape == ()
     last = ds[len(ds) - 1]
     assert last["action_pad_mask"].sum() == 1
     assert ds.stats()["actions"]["mean"].shape == (8,)

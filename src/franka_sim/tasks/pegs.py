@@ -21,6 +21,8 @@ class PegInsertionTask(InsertionTask):
     z_tol = 0.02
     steps_per_object = 200
 
+    long_instruction = "insert all the pegs into their holes"
+
     def __init__(self, num_pegs: int = 3, mode: str = "single", num_targets: int = 2, randomize: bool = True):
         self.num_pegs = num_pegs
         self.object_names = tuple(f"{obj.COLOR_NAMES[i]} peg" for i in range(num_pegs))

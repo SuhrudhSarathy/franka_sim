@@ -14,9 +14,10 @@ KINDS = ("block", "cylinder", "bar", "cube")
 class KittingTask(InsertionTask):
     """Parts lie scattered on the table; each goes into the compartment of the tray that fits it.
 
-    Default ``mode="subset"`` with ``num_targets=2``: each episode asks for an ordered pick list of two
-    parts (``options={"targets": [2, 0]}`` to choose), like filling a kit order. Parts must be placed
-    aligned with their compartment. See ``InsertionTask`` for modes and observations.
+    Default ``mode="single"``: one part, chosen by the condition. ``kitting_long`` (``mode="all"``)
+    fills the whole tray in any order; ``mode="subset"`` asks for an ordered pick list of
+    ``num_targets`` parts (``options={"targets": [2, 0]}``). Parts must be placed aligned with their
+    compartment. See ``InsertionTask`` for modes and observations.
     """
 
     name = "kitting"
@@ -27,7 +28,9 @@ class KittingTask(InsertionTask):
     z_tol = 0.012
     steps_per_object = 160
 
-    def __init__(self, mode: str = "subset", num_targets: int = 2, randomize: bool = True):
+    long_instruction = "put all the parts in the kit tray"
+
+    def __init__(self, mode: str = "single", num_targets: int = 2, randomize: bool = True):
         self.grasp_offset = tuple(obj.grasp_offset_for_height(obj.kit_part_footprint(k)[2]) for k in KINDS)
         self.symmetry = tuple(None if obj.KIT_PARTS[k][0] == obj.CYL else
                               (np.pi / 2 if k == "cube" else np.pi) for k in KINDS)

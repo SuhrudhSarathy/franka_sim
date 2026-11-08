@@ -8,6 +8,11 @@ Each episode requests an ordered list of objects to insert (``targets``):
 * ``mode="all"``: every object, in random order,
 * ``mode="subset"``: ``num_targets`` random objects (``options={"targets": [2, 0]}`` to choose).
 
+In ``all`` mode (the ``*_long`` tasks) the order is free: success needs every object inserted, and
+the sampled order (``cond_order``) is only what the scripted expert follows. The instruction is
+order-free too (``long_instruction``). In every mode, inserting an object that was not requested
+sets ``info["wrong_target"]`` and fails the episode.
+
 Observations (the same keys for every insertion task, so one policy and one model fit all):
 
 ``obj_pos`` / ``obj_quat`` (flattened per object), ``goal_pos`` (flattened), ``fixture_quat``,
@@ -35,6 +40,7 @@ class InsertionTask(Task):
     obj_prefix = "obj"
     fixture = "fixture"
     object_names: tuple[str, ...] = ()
+    long_instruction = "insert all the objects"
     # Tolerances on the object origin vs. its goal: horizontal distance, and height above the goal.
     xy_tol = 0.006
     z_tol = 0.012
@@ -61,7 +67,11 @@ class InsertionTask(Task):
 
     @property
     def max_episode_steps(self) -> int:  # type: ignore[override]
-        return 60 + self.steps_per_object * self.num_targets
+        return getattr(self, "_max_episode_steps", None) or 60 + self.steps_per_object * self.num_targets
+
+    @max_episode_steps.setter
+    def max_episode_steps(self, value: int) -> None:
+        self._max_episode_steps = value
 
     def sample_layout(self, rng: np.random.Generator):
         """Return ``(fixture_xy (2,), fixture_yaw, obj_xy (n, 2), obj_yaw (n,))`` for one env."""
@@ -114,8 +124,8 @@ class InsertionTask(Task):
                 qpos[k, a + 2] = self.obj_rest_z(i)
                 qpos[k, a + 3:a + 7] = yaw_quat(obj_yaw[i])
             self.extra_mocap(k, rng, mocap, quat, layout)
-            if "targets" in options:
-                self.targets[e] = options["targets"]
+            if "targets" in options or "order" in options:
+                self.targets[e] = options.get("targets", options.get("order"))
             elif "target" in options:
                 t = int(options["target"])
                 rest = [j for j in rng.permutation(self.num_objects) if j != t]
@@ -166,15 +176,25 @@ class InsertionTask(Task):
         idx = np.arange(sim.num_envs)[:, None]
         req = inserted[idx, self.targets]
         dist = np.linalg.norm(pos - goals, axis=-1)[idx, self.targets]
-        success = req.all(axis=1)
-        reward = req.mean(axis=1) - dist.sum(axis=1)
-        return Evaluation(reward, success, {"obj_inserted": inserted, "num_inserted": req.sum(axis=1)})
+        requested = np.zeros_like(inserted)
+        requested[idx, self.targets] = True
+        wrong = (inserted & ~requested).any(axis=1)
+        success = req.all(axis=1) & ~wrong
+        reward = req.mean(axis=1) - dist.sum(axis=1) - wrong
+        return Evaluation(reward, success, {"obj_inserted": inserted, "progress": req.sum(axis=1),
+                                            "wrong_target": wrong})
 
     def conditioning(self):
-        cond = {"targets": self.targets.copy()}
         if self.mode == "single":
-            cond["target"] = self.targets[:, 0].copy()
-        return cond
+            return {"target": self.targets[:, 0].copy()}
+        if self.mode == "all":
+            return {"order": self.targets.copy()}
+        return {"targets": self.targets.copy()}
+
+    @property
+    def num_steps(self) -> int:
+        """Sub-goals per episode (objects to insert)."""
+        return self.num_targets
 
     def mask_bodies(self, cond):
         if self.mode != "single":
@@ -185,6 +205,8 @@ class InsertionTask(Task):
         return self.object_names[i]
 
     def instruction(self, env_id):
+        if self.mode == "all":
+            return self.long_instruction
         names = [self.describe(int(i)) for i in self.targets[env_id]]
         return self.instruction_template(names)
 
