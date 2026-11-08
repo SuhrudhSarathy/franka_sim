@@ -76,15 +76,32 @@ Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp 
 
 ## Tasks
 
-| task | objects | conditioning (`info["cond_*"]`, `reset(options=...)`) | success |
+Every task family comes in two variants. A **single** variant asks for one target picked out by
+the condition and named in the instruction, which tests language adherence. A **long** variant asks
+for every target in the scene, in any order, which tests long-horizon completion.
+
+| family | objects | single variant (`cond_target`) | long variant (`cond_order`) |
 |---|---|---|---|
-| `reach` | mocap target sphere | `goal_pos` | gripper within 2 cm of the goal |
-| `hammer_nails` | hammer on a stand; board with 4 identical nails at random positions, on friction slide joints | `target` nail (0 = furthest to the robot's left) | target nail driven ≥ 75 %, no other nail > 25 % |
-| `buttons` | panel with 4 colored spring-loaded buttons | `sequence` of buttons (`sequence_length` ≥ 1, or `target`) | buttons pressed in order; a wrong press fails |
-| `peg_insertion` | 3 colored square pegs, receptacle with 3 matching holes (5 mm clearance) | `targets` / `target` | requested pegs seated |
-| `gear_assembly` | 3 spur gears (small / medium / large) lying flat; plate with 3 shafts (3 mm bore clearance) spaced so the gears mesh | `targets`: assembly order (default `mode="all"`) | every requested gear on its shaft |
-| `kitting` | 4 machined parts (block, cylinder, bar, cube); kit tray with a fitted compartment per part | `targets`: the pick list (default 2 parts, `mode="subset"`) | requested parts aligned in their compartments |
-| `pcb_insertion` | expansion card standing in a rack; motherboard with 3 card-edge connectors (1.4 mm clearance per side) | `target` connector (0 = leftmost) | card fully seated in the target connector |
+| `hammer_nails` | hammer on a stand; board with 4 identical nails at random positions, on friction slide joints | drive the target nail ≥ 75 % (0 = furthest to the robot's left), no other nail > 25 % | `hammer_nails_long`: drive all 4 nails |
+| `buttons` | panel with 4 colored spring-loaded buttons | press the target button | `buttons_long`: press all 4 |
+| `peg_insertion` | 3 colored square pegs, receptacle with 3 matching holes (5 mm clearance) | seat the target peg | `peg_insertion_long`: seat all 3 |
+| `gear_assembly` | 3 spur gears (small / medium / large) lying flat; plate with 3 shafts (3 mm bore clearance) spaced so the gears mesh | put the target gear on its shaft | `gear_assembly_long`: all 3 gears |
+| `kitting` | 4 machined parts (block, cylinder, bar, cube); kit tray with a fitted compartment per part | put the target part in its compartment | `kitting_long`: all 4 parts |
+| `pcb_insertion` | expansion card standing in a rack; motherboard with 3 card-edge connectors (1.4 mm clearance per side) | seat the card in the target connector (0 = leftmost) | none |
+| `reach` | mocap target sphere | gripper within 2 cm of `goal_pos` (smoke test, not in the benchmark) | none |
+
+* **Wrong targets fail.** In a single variant, acting on any target other than the requested one
+  sets `info["wrong_target"]` and fails the episode. That means driving another nail past 25 %,
+  pressing another button, inserting another object, or seating the card in another connector.
+* **Order is free in long variants.** Each episode still samples a random order (`cond_order`), and
+  the scripted expert follows it, so recorded demos vary in order. Success ignores the order, and
+  the instruction does not mention it ("pick up the hammer and hit all the nails").
+* **Progress.** `info["progress"]` counts the sub-goals done so far, from 0 to
+  `env.task.num_steps`.
+* **Horizons.** `franka_sim.tasks.HORIZONS` sets each episode limit to 2× the longest of 64
+  scripted demos.
+* **Other modes.** Ordered sequences are still available as task options: `buttons` with
+  `sequence_length=2`, and `kitting` with `mode="subset"`. They are not part of the benchmark.
 
 **Randomization.** Every reset samples:
 - the robot start pose (end-effector offset of ±8/15/8 cm and ±0.5 rad yaw, solved with IK, plus
@@ -100,19 +117,25 @@ works at the fixture. Pass `randomize_start=False` to the env, or `task_kwargs={
 for fixed layouts.
 
 `peg_insertion`, `gear_assembly`, `kitting` and `pcb_insertion` share `InsertionTask`, which supports
-`mode="single" | "subset" | "all"`. They also share an observation layout: `obj_pos`, `obj_quat`,
+`mode="single" | "subset" | "all"` (the `_long` variants are `mode="all"`). They also share an observation layout: `obj_pos`, `obj_quat`,
 `goal_pos`, `fixture_quat`, `obj_inserted`, `targets_mask`, `target_onehot`, `target_obj_pos`,
 `target_goal_pos`. So one policy, or one multi-task model, works across all of them.
 
-Each task has a language instruction per env (`env.instructions()`), for example "pick up the hammer
-and hit the second nail from the left", "assemble the gears: the small gear, then the large gear,
-then the medium gear", "kit the bar, then the cube", or "insert the card into the rightmost
-connector". Pass task options as `franka_sim.make("kitting", task_kwargs={"mode": "all"})`.
+Each task has a language instruction per env (`env.instructions()`). Examples:
+- "pick up the hammer and hit the second nail from the left"
+- "press the red button"
+- "put the small gear on its shaft"
+- "kit the cube"
+- "insert the card into the rightmost connector"
+- "put all the parts in the kit tray"
+
+Pass task options as `franka_sim.make("kitting", task_kwargs={"mode": "subset"})`. Custom kwargs keep
+the task's own default horizon, not the measured one.
 
 All assets are made from primitive geoms, and collision bitmasks keep contact counts low for
 MuJoCo Warp. The fixtures are mocap bodies, so they can be placed independently in every world on
 both backends. To add your own task, subclass `franka_sim.Task` (or `InsertionTask` for
-pick-and-insert) and call `franka_sim.register_task`.
+pick-and-insert) and call `franka_sim.register_task`. `AGENTS.md` has a checklist.
 
 ## Scripted demos and recording
 
@@ -125,7 +148,9 @@ the nail is driven in. All insertion tasks use one `InsertionPolicy`, which:
 - matches the fixture's yaw, modulo the part's symmetry;
 - re-grasps if a part slips.
 
-Over 40–80 randomized episodes per task, the scripted experts succeed 100 % of the time. Each policy keeps its own state per env, so it works with batched envs whose
+On the 50 held-out evaluation episodes of every benchmark task, the scripted experts succeed 100 % of
+the time (`scripts/evaluate.py --policy scripted`). The hammer expert keeps hold of the hammer
+through `hammer_nails_long`. Each policy keeps its own state per env, so it works with batched envs whose
 episodes start and end at different times.
 
 ```sh
@@ -136,12 +161,12 @@ uv run python scripts/record_demos.py --task hammer_nails --episodes 40 --condit
 # only episodes that hit the third nail from the left
 uv run python scripts/record_demos.py --task hammer_nails --episodes 10 --condition target=2
 
-# button sequences, peg insertion of all pegs, the Warp backend
+# long-horizon variants, an ordered button sequence, the Warp backend
+uv run python scripts/record_demos.py --task hammer_nails_long --episodes 20
 uv run python scripts/record_demos.py --task buttons --task-kwargs sequence_length=2
-uv run python scripts/record_demos.py --task peg_insertion --task-kwargs mode=all
 uv run --extra warp python scripts/record_demos.py --task hammer_nails --backend warp --num-envs 64 --cameras
 
-# run the scripted expert on every environment and save one mp4 per episode (5 each) to videos/
+# run the scripted expert on reach and every benchmark task and save one mp4 per episode (5 each) to videos/
 uv run --extra video python scripts/make_videos.py
 
 # render saved episodes from their simulator states (any camera, any resolution)
@@ -183,7 +208,7 @@ sample = ds[0]   # {"obs/rgb_wrist": (2,128,128,3) uint8, "actions": (16, 8), "c
 ```sh
 uv sync --extra lerobot
 
-# record ~50 scripted demos per task and convert each into a LeRobot (v3) dataset
+# record scripted demos for every benchmark task and convert each into a LeRobot (v3) dataset
 uv run --extra lerobot python scripts/build_datasets.py --namespace <hf-user> --episodes 50
 
 # or convert your own recordings
@@ -204,7 +229,7 @@ uv run --extra lerobot python scripts/to_lerobot.py --push --repo-id <hf-user>/f
 | `observation.images.target_mask` | 256×256×3 PNG | binary mask (0/255) of the target entity from the top camera; single-target tasks only |
 | `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper) |
 | `action.joint_pos`, `action.ee_pose` | 8 | both action representations |
-| `cond.*` | | episode conditioning, e.g. `cond.target` (nail / peg / connector index), `cond.targets` (order) |
+| `cond.*` | | episode conditioning: `cond.target` (single variants: nail / button / peg / gear / part / connector index) or `cond.order` (long variants: the order the expert followed) |
 | `next.reward`, `next.success`, `next.done` | 1 | |
 | `task` | string | language instruction, e.g. "pick up the hammer and hit the leftmost nail" |
 
@@ -214,19 +239,64 @@ same recording without simulating again.
 
 ### Target masks
 
-Single-target tasks also get `observation.images.target_mask`, a binary image of the entity the
-episode's condition selects, seen from the `top` camera: the nail to hit (hammer_nails), the
-connector to use (pcb_insertion), the peg to insert (peg_insertion), the button to press (buttons
-with one button), the gear in single mode. It comes from MuJoCo's segmentation rendering, so it is
-exact, and it is amodal (the arm or the hammer never hide the target). It is stored losslessly as
-PNG with three identical channels. Multi-step tasks (all gears, kitting lists, button sequences)
-and reach have no mask. Use `--mask-camera <camera>` to mask from another camera, `none` to drop it.
+Single variants also get `observation.images.target_mask`. It is a binary image of the entity the
+episode's condition selects, seen from the `top` camera: the nail, button, peg, gear, part or
+connector. It comes from MuJoCo's segmentation rendering, so it is exact. It is also amodal: the arm
+and the hammer never hide the target. Masks are stored losslessly as PNG with three identical
+channels, and cost about 1 ms per frame. Long variants, ordered sequences and reach have no mask. Use `--mask-camera <camera>` to mask from another camera, `none` to drop it.
 
 At rollout time the same image comes from the env:
 
 ```python
 mask = env.render_target_mask("top", env_id=0)  # (H, W) uint8 0/255, or None
 ```
+
+## Benchmark
+
+`franka_sim.benchmark` defines the suite: the 11 single and long tasks above. It also fixes the
+evaluation protocol, and `scripts/evaluate.py` runs it:
+
+```sh
+# the scripted expert with privileged state: 100 % on every task (upper bound, sanity check)
+uv run python scripts/evaluate.py --policy scripted
+
+# your policy: a factory make(env, **kwargs) returning an object with reset(env_ids, obs) / act(obs)
+uv run python scripts/evaluate.py --policy my_pkg.policies:make --policy-kwargs '{"ckpt": "run1"}' \
+    --episodes 50 --cameras front wrist --mask-camera top
+```
+
+* **Fixed evaluation episodes.** Episode `k` is reset with seed `EVAL_SEED + k` (100 000 + k).
+  Single variants also get target `k % num_targets`. Every policy faces the same layouts and
+  conditions, and the targets are balanced. Demonstrations must use seeds below `EVAL_SEED`, and
+  `build_datasets.py` checks this.
+* **What the policy sees.** In the default `vision` mode, a policy gets robot proprioception
+  (`joint_pos`, `joint_vel`, `gripper_width`, `ee_pos`, `ee_quat`), `rgb_<camera>`, `instruction`,
+  and with `--mask-camera` also `target_mask`. `privileged` mode adds the simulator's object state,
+  which is only for oracle baselines. Actions default to `joint_pos`; pass `--action-mode` to change
+  it.
+* **Metrics per task.**
+  - `success_rate`.
+  - `wrong_target_rate`: single variants, language adherence. A wrong target also ends the episode
+    as a failure.
+  - `mean_progress`: the fraction of sub-goals done, the main long-horizon signal.
+  - `mean_success_steps`.
+  - `per_target_success`.
+
+  Everything is written to `results/eval.json`.
+
+| task | kind | scripted expert success | expert steps (mean) | horizon |
+|---|---|---|---|---|
+| hammer_nails | single | 1.00 | 81 | 200 |
+| hammer_nails_long | long | 1.00 | 142 | 350 |
+| buttons | single | 1.00 | 35 | 100 |
+| buttons_long | long | 1.00 | 111 | 300 |
+| peg_insertion | single | 1.00 | 98 | 250 |
+| peg_insertion_long | long | 1.00 | 320 | 750 |
+| gear_assembly | single | 1.00 | 114 | 300 |
+| gear_assembly_long | long | 1.00 | 429 | 1000 |
+| kitting | single | 1.00 | 113 | 400 |
+| kitting_long | long | 1.00 | 568 | 1250 |
+| pcb_insertion | single | 1.00 | 114 | 250 |
 
 ## Layout
 
@@ -236,6 +306,7 @@ src/franka_sim/
   gym_env.py        single-env gymnasium wrapper
   scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
   ik.py             damped-least-squares IK
+  benchmark.py      benchmark suite, seeds, observation protocol, evaluation loop
   masks.py          binary target masks from segmentation rendering
   backends/         cpu.py (MuJoCo), warp.py (MuJoCo Warp)
   tasks/            reach, hammer_nails, buttons, insertion.py (pegs, gears, kitting, pcb); objects.py = assets
@@ -243,7 +314,8 @@ src/franka_sim/
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)
   lerobot_export.py HDF5 demos -> LeRobot dataset
-scripts/            record_demos.py, replay.py, make_videos.py, to_lerobot.py, build_datasets.py, benchmark.py
+scripts/            evaluate.py (benchmark evaluation), record_demos.py, replay.py, make_videos.py,
+                    to_lerobot.py, build_datasets.py, benchmark.py (physics speed, not the task benchmark)
 ```
 
 The Panda model is `mjx_panda.xml` from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
