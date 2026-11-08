@@ -153,6 +153,10 @@ Scripts (`scripts/`):
 - **Conversion cost:** about 0.1–0.15 s per frame. Rendering two cameras takes about 18 ms of that;
   the rest is LeRobot's write path (a PNG per frame, then encoding, then stats). Recording takes
   seconds. On an NVIDIA box, use `MUJOCO_GL=egl` and parallelize across datasets with `--jobs`.
+- **Headless Linux:** MuJoCo's default GLFW backend needs a display. `franka_sim/__init__.py`
+  sets `MUJOCO_GL=egl` when there is none. This must happen before `mujoco` is first imported, so
+  in scripts import `franka_sim` before `mujoco`. Without it, `mujoco.Renderer` fails with
+  "an OpenGL platform library has not been loaded".
 - **numpy:** lerobot needs numpy < 2.3, so the pin is `numpy>=1.26`.
 - **Grasping:** the gripper needs the stiff servo in `robot.py` (kp 3000, 70 N). The Menagerie
   default squeezes about 4 N and the hammer slips. Gears are grasped on a hidden smooth disc,

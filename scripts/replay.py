@@ -10,10 +10,10 @@ import json
 from pathlib import Path
 
 import imageio.v2 as imageio
-import mujoco
 import numpy as np
 
-import franka_sim
+import franka_sim  # first: picks a headless OpenGL backend before mujoco loads
+import mujoco
 from franka_sim.recording import dataset_info, load_episode
 
 

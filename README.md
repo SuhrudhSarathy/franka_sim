@@ -16,6 +16,12 @@ uv sync --extra warp        # + MuJoCo Warp backend
 uv sync --extra video       # + mp4 writing for the scripts
 ```
 
+**Headless servers.** MuJoCo renders through OpenGL. On Linux with no display (`DISPLAY` and
+`WAYLAND_DISPLAY` both unset), `import franka_sim` sets `MUJOCO_GL=egl`. That gives GPU rendering
+with the NVIDIA driver, or Mesa's software EGL otherwise. Two cases need a manual setting:
+- A machine with no EGL library at all: install OSMesa and set `MUJOCO_GL=osmesa`.
+- A script that imports `mujoco` before `franka_sim`: set `MUJOCO_GL=egl` yourself.
+
 ## Quick start
 
 ```python

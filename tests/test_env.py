@@ -89,3 +89,12 @@ def test_gym_wrapper():
     obs, r, term, trunc, info = env.step(env.action_space.sample().clip(-0.01, 1.0))
     assert env.render().shape == (48, 64, 3)
     env.close()
+
+
+def test_headless_linux_defaults_to_egl():
+    from franka_sim import _default_gl_backend
+
+    assert _default_gl_backend({}, "linux") == "egl"
+    assert _default_gl_backend({"DISPLAY": ":0"}, "linux") is None
+    assert _default_gl_backend({"MUJOCO_GL": "osmesa"}, "linux") is None  # the user's choice wins
+    assert _default_gl_backend({}, "darwin") is None
