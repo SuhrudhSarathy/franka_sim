@@ -633,7 +633,7 @@ requires-dist = [
     { name = "imageio", marker = "extra == 'video'", specifier = ">=2.38.1" },
     { name = "imageio-ffmpeg", marker = "extra == 'video'", specifier = ">=0.8.1" },
     { name = "lerobot", extras = ["dataset"], marker = "extra == 'lerobot'", specifier = ">=0.7" },
-    { name = "mujoco", specifier = ">=3.3" },
+    { name = "mujoco", specifier = ">=4.0" },
     { name = "mujoco-warp", marker = "extra == 'warp'", specifier = ">=4.0" },
     { name = "numpy", specifier = ">=1.26" },
 ]
