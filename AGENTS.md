@@ -173,7 +173,8 @@ Done:
 On hold (the user asked to wait; do not start without asking):
 - **Recording and converting the benchmark datasets.** When asked, run
   `uv run --extra lerobot python scripts/build_datasets.py --overwrite --jobs 3` (add
-  `--namespace <hf-user>` once known, and `--episodes N` once the user picks a count). The whole
+  `--namespace <hf-user>` once known, `--episodes N` once the user picks a count, and
+  `--hdf5-dir` / `--lerobot-dir` to write somewhere other than `data/` and `lerobot_data/`). The whole
   suite is about 280k frames at 100 episodes per task, roughly 2–2.5 h on the M-series Mac.
 - **A combined multi-task dataset** (`franka_sim_suite`).
 - **Uploading to the Hugging Face Hub.** `to_lerobot.py --push` needs `hf auth login` and the

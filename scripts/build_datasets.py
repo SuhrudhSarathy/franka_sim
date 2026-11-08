@@ -3,8 +3,10 @@
     uv run --extra lerobot python scripts/build_datasets.py                       # the whole suite
     uv run --extra lerobot python scripts/build_datasets.py --tasks hammer_nails --episodes 100
     uv run --extra lerobot python scripts/build_datasets.py --namespace <hf-user> --jobs 4
+    uv run --extra lerobot python scripts/build_datasets.py --hdf5-dir /mnt/big/demos --lerobot-dir /mnt/big/lerobot
 
-Outputs ``data/<name>.hdf5`` (states + low-dim obs) and ``lerobot_data/<name>/`` (LeRobot v3,
+Outputs ``<hdf5-dir>/<name>.hdf5`` (states + low-dim obs, default ``data/``) and
+``<lerobot-dir>/<name>/`` (default ``lerobot_data/``; LeRobot v3,
 repo id ``<namespace>/franka_sim_<name>``). Upload with scripts/to_lerobot.py --push.
 """
 
@@ -24,7 +26,8 @@ DATASETS = {name: (name, {}, n or None) for name, (_kind, n) in SUITE.items()}
 
 
 def build(name: str, episodes: int, namespace: str, cameras: list[str], image_size: tuple[int, int],
-          num_envs: int, seed: int, overwrite: bool) -> dict:
+          num_envs: int, seed: int, overwrite: bool, hdf5_dir: str = "data",
+          lerobot_dir: str = "lerobot_data") -> dict:
     import shutil
 
     import franka_sim
@@ -33,8 +36,9 @@ def build(name: str, episodes: int, namespace: str, cameras: list[str], image_si
     from franka_sim.recording import DemoWriter, collect_demos
 
     task, task_kwargs, balanced = DATASETS[name]
-    h5 = Path("data") / f"{name}.hdf5"
-    root = Path("lerobot_data") / name
+    h5 = Path(hdf5_dir) / f"{name}.hdf5"
+    h5.parent.mkdir(parents=True, exist_ok=True)
+    root = Path(lerobot_dir) / name
     if overwrite:
         h5.unlink(missing_ok=True)
         shutil.rmtree(root, ignore_errors=True)
@@ -64,12 +68,15 @@ def main():
     p.add_argument("--jobs", type=int, default=3, help="datasets built in parallel")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--hdf5-dir", default="data", help="where the recorded HDF5 demos go")
+    p.add_argument("--lerobot-dir", default="lerobot_data", help="where the LeRobot datasets go")
     args = p.parse_args()
     if args.seed + 10 * args.episodes >= EVAL_SEED:
         raise SystemExit(f"--seed must stay well below the evaluation seeds ({EVAL_SEED})")
 
     kw = dict(episodes=args.episodes, namespace=args.namespace, cameras=args.cameras,
-              image_size=tuple(args.image_size), num_envs=args.num_envs, seed=args.seed, overwrite=args.overwrite)
+              image_size=tuple(args.image_size), num_envs=args.num_envs, seed=args.seed, overwrite=args.overwrite,
+              hdf5_dir=args.hdf5_dir, lerobot_dir=args.lerobot_dir)
     with ProcessPoolExecutor(args.jobs) as pool:
         futures = {name: pool.submit(build, name, **kw) for name in args.tasks}
         results = []
@@ -77,8 +84,8 @@ def main():
             res = fut.result()
             results.append(res)
             print(json.dumps(res), flush=True)
-    summary_path = Path("lerobot_data") / "summary.json"
-    summary_path.parent.mkdir(exist_ok=True)
+    summary_path = Path(args.lerobot_dir) / "summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary = {r["name"]: r for r in json.loads(summary_path.read_text())} if summary_path.exists() else {}
     summary.update({r["name"]: r for r in results})  # keep entries of datasets not rebuilt now
     summary_path.write_text(json.dumps([summary[k] for k in DATASETS if k in summary], indent=2))

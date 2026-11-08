@@ -210,6 +210,8 @@ uv sync --extra lerobot
 
 # record scripted demos for every benchmark task and convert each into a LeRobot (v3) dataset
 uv run --extra lerobot python scripts/build_datasets.py --namespace <hf-user> --episodes 50
+# outputs default to data/ (HDF5) and lerobot_data/ (LeRobot); put them elsewhere with
+#   --hdf5-dir /path/to/demos --lerobot-dir /path/to/lerobot
 
 # or convert your own recordings
 uv run --extra lerobot python scripts/to_lerobot.py data/hammer_nails.hdf5 \
