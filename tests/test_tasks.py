@@ -128,3 +128,31 @@ def test_start_pose_fixed_when_disabled():
     a, _ = env.reset()
     b, _ = env.reset()
     np.testing.assert_allclose(a["joint_pos"], b["joint_pos"])
+
+
+@pytest.mark.parametrize("task,kwargs,body", [
+    ("hammer_nails", {}, "nail{}"),
+    ("pcb_insertion", {}, "motherboard_conn{}"),
+    ("peg_insertion", {}, "peg{}"),
+    ("buttons", {}, "button{}"),
+])
+def test_target_mask(task, kwargs, body):
+    env = franka_sim.make(task, num_envs=3, seed=1, task_kwargs=kwargs, image_size=(128, 128))
+    env.reset()
+    cond = env.task.conditioning()
+    for i in range(3):
+        k = int(np.ravel(next(iter(cond.values()))[i])[0])
+        assert env.task.mask_bodies({key: v[i] for key, v in cond.items()}) == [body.format(k)]
+        mask = env.render_target_mask("top", env_id=i)
+        assert mask.shape == (128, 128) and set(np.unique(mask)) == {0, 255}
+    env.close()
+
+
+@pytest.mark.parametrize("task,kwargs", [
+    ("gear_assembly", {}), ("kitting", {}), ("buttons", {"sequence_length": 2}), ("reach", {}),
+])
+def test_no_mask_for_multi_step_tasks(task, kwargs):
+    env = franka_sim.make(task, task_kwargs=kwargs)
+    env.reset()
+    assert env.render_target_mask() is None
+    env.close()

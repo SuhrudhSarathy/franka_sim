@@ -137,6 +137,9 @@ class HammerNailsTask(Task):
     def conditioning(self):
         return {"target": self.target.copy()}
 
+    def mask_bodies(self, cond):
+        return [f"nail{int(np.ravel(cond['target'])[0])}"]
+
     def instruction(self, env_id):
         k = int(self.target[env_id])
         if k == 0:

@@ -93,6 +93,9 @@ class PCBInsertionTask(InsertionTask):
     def conditioning(self):
         return {"target": self.slot.copy()}
 
+    def mask_bodies(self, cond):
+        return [f"motherboard_conn{int(np.ravel(cond['target'])[0])}"]
+
     def instruction(self, env_id):
         s = int(self.slot[env_id])
         which = ORDINALS[s] if self.num_slots == 3 else f"slot {s}"

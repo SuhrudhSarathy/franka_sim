@@ -88,6 +88,11 @@ class Task:
         """Per-env conditioning variables (e.g. target index), each ``(N, ...)``."""
         return {}
 
+    def mask_bodies(self, cond: dict) -> list[str] | None:
+        """Bodies forming the target entity of one episode with conditioning ``cond`` (one env's
+        values of ``conditioning()``), for target masks. ``None``: the task has no single target."""
+        return None
+
     # Helpers -----------------------------------------------------------------------------------
     def free_joint_qadr(self, body: str) -> int:
         """qpos address of the free joint of ``body``."""

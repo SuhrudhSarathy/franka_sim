@@ -201,6 +201,7 @@ uv run --extra lerobot python scripts/to_lerobot.py --push --repo-id <hf-user>/f
 | `observation.ee_pose` | 7 | end-effector xyz + quaternion (wxyz) |
 | `observation.environment_state` | task-specific | privileged object state; names in `meta/info.json` |
 | `observation.images.{front,wrist}` | 256×256×3 video | re-rendered from the recorded simulator states |
+| `observation.images.target_mask` | 256×256×3 PNG | binary mask (0/255) of the target entity from the top camera; single-target tasks only |
 | `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper) |
 | `action.joint_pos`, `action.ee_pose` | 8 | both action representations |
 | `cond.*` | | episode conditioning, e.g. `cond.target` (nail / peg / connector index), `cond.targets` (order) |
@@ -211,6 +212,22 @@ Demos are recorded as low-dimensional data plus simulator states, so recording i
 are rendered at conversion time, which means any camera set and resolution can be exported from the
 same recording without simulating again.
 
+### Target masks
+
+Single-target tasks also get `observation.images.target_mask`, a binary image of the entity the
+episode's condition selects, seen from the `top` camera: the nail to hit (hammer_nails), the
+connector to use (pcb_insertion), the peg to insert (peg_insertion), the button to press (buttons
+with one button), the gear in single mode. It comes from MuJoCo's segmentation rendering, so it is
+exact, and it is amodal (the arm or the hammer never hide the target). It is stored losslessly as
+PNG with three identical channels. Multi-step tasks (all gears, kitting lists, button sequences)
+and reach have no mask. Use `--mask-camera <camera>` to mask from another camera, `none` to drop it.
+
+At rollout time the same image comes from the env:
+
+```python
+mask = env.render_target_mask("top", env_id=0)  # (H, W) uint8 0/255, or None
+```
+
 ## Layout
 
 ```
@@ -219,6 +236,7 @@ src/franka_sim/
   gym_env.py        single-env gymnasium wrapper
   scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
   ik.py             damped-least-squares IK
+  masks.py          binary target masks from segmentation rendering
   backends/         cpu.py (MuJoCo), warp.py (MuJoCo Warp)
   tasks/            reach, hammer_nails, buttons, insertion.py (pegs, gears, kitting, pcb); objects.py = assets
   policies/         scripted experts

@@ -8,6 +8,7 @@ import numpy as np
 from franka_sim import robot
 from franka_sim.backends import Backend, make_backend
 from franka_sim.ik import DiffIK, axis_angle_to_quat, mat_to_quat, quat_mul
+from franka_sim.masks import render_mask, target_geoms
 from franka_sim.scene import build_spec
 from franka_sim.tasks import Task, make_task
 
@@ -235,6 +236,22 @@ class FrankaEnv:
         renderer = self._renderers[key]
         renderer.update_scene(self.sim.mjdata(env_id), camera=camera)
         return renderer.render()
+
+    def render_target_mask(self, camera: str | int = "top", env_id: int = 0, height: int | None = None,
+                           width: int | None = None) -> np.ndarray | None:
+        """Binary ``(H, W)`` uint8 mask (0/255) of env ``env_id``'s target entity (the nail to hit,
+        the connector, the peg, the button), or ``None`` for tasks without a single target."""
+        cond = {k: v[env_id] for k, v in self.task.conditioning().items()}
+        bodies = self.task.mask_bodies(cond)
+        if bodies is None:
+            return None
+        h, w = height or self.image_size[0], width or self.image_size[1]
+        key = (h, w)
+        if key not in self._renderers:
+            self._renderers[key] = mujoco.Renderer(self.model, height=h, width=w)
+        mask = render_mask(self._renderers[key], self.sim.mjdata(env_id), camera,
+                           target_geoms(self.model, bodies))
+        return mask.astype(np.uint8) * 255
 
     def close(self) -> None:
         for r in self._renderers.values():

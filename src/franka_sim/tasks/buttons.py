@@ -105,6 +105,11 @@ class ButtonPressTask(Task):
     def conditioning(self):
         return {"sequence": self.sequence.copy()}
 
+    def mask_bodies(self, cond):
+        if self.sequence_length != 1:
+            return None  # multi-step: no mask
+        return [f"button{int(np.ravel(cond['sequence'])[0])}"]
+
     def instruction(self, env_id):
         colors = [obj.COLOR_NAMES[b % len(obj.COLOR_NAMES)] for b in self.sequence[env_id]]
         if len(colors) == 1:

@@ -31,3 +31,6 @@ def test_convert_to_lerobot(tmp_path):
     np.testing.assert_allclose(item["action"].numpy(), item["action.joint_pos"].numpy())
     targets = {int(ds[i]["cond.target"]) for i in (0, ds.num_frames - 1)}
     assert targets == {0, 1}
+    mask = item["observation.images.target_mask"]
+    assert mask.shape == (3, 64, 64)
+    assert set(mask.unique().tolist()) <= {0.0, 1.0} and mask.sum() > 0

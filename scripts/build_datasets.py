@@ -80,8 +80,11 @@ def main():
             res = fut.result()
             results.append(res)
             print(json.dumps(res), flush=True)
-    Path("lerobot_data").mkdir(exist_ok=True)
-    (Path("lerobot_data") / "summary.json").write_text(json.dumps(results, indent=2))
+    summary_path = Path("lerobot_data") / "summary.json"
+    summary_path.parent.mkdir(exist_ok=True)
+    summary = {r["name"]: r for r in json.loads(summary_path.read_text())} if summary_path.exists() else {}
+    summary.update({r["name"]: r for r in results})  # keep entries of datasets not rebuilt now
+    summary_path.write_text(json.dumps([summary[k] for k in DATASETS if k in summary], indent=2))
 
 
 if __name__ == "__main__":

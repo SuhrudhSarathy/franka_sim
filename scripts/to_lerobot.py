@@ -25,6 +25,8 @@ def main():
     p.add_argument("--cameras", nargs="*", default=["front", "wrist"])
     p.add_argument("--image-size", nargs=2, type=int, default=[256, 256], metavar=("H", "W"))
     p.add_argument("--action", default="joint_pos", choices=["joint_pos", "ee_pose"])
+    p.add_argument("--mask-camera", default="top",
+                   help="camera for the target mask (single-target tasks); 'none' disables it")
     p.add_argument("--images", action="store_true", help="store PNG frames instead of mp4 videos")
     p.add_argument("--include-failures", action="store_true")
     p.add_argument("--push", action="store_true", help="upload an existing dataset at --root to the Hub")
@@ -41,7 +43,8 @@ def main():
 
     t0 = time.time()
     ds = convert(args.hdf5, args.repo_id, args.root, cameras=args.cameras, image_size=tuple(args.image_size),
-                 action=args.action, use_videos=not args.images, only_success=not args.include_failures)
+                 action=args.action, use_videos=not args.images, only_success=not args.include_failures,
+                 mask_camera=None if args.mask_camera.lower() == "none" else args.mask_camera)
     print(f"\nwrote {ds.num_episodes} episodes / {ds.num_frames} frames to {args.root} in {time.time() - t0:.0f}s")
 
 

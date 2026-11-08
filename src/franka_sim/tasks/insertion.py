@@ -176,6 +176,11 @@ class InsertionTask(Task):
             cond["target"] = self.targets[:, 0].copy()
         return cond
 
+    def mask_bodies(self, cond):
+        if self.mode != "single":
+            return None  # multi-step: no mask
+        return [f"{self.obj_prefix}{int(np.ravel(cond['target'])[0])}"]
+
     def describe(self, i: int) -> str:
         return self.object_names[i]
 

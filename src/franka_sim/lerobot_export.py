@@ -13,6 +13,11 @@ Per frame the dataset holds:
 * ``action`` (8): the command in the chosen representation, ``joint_pos`` (7 joint targets + gripper
   closure) or ``ee_pose`` (xyz + wxyz quaternion + gripper closure).
 * ``action.joint_pos`` / ``action.ee_pose``: both representations, whichever ``action`` is.
+* ``observation.images.target_mask``: binary mask (0/255, stored losslessly as PNG, 3 identical
+  channels) of the episode's target entity seen from ``mask_camera`` (default the top camera): the
+  nail to hit, the connector to use, the peg to insert, the button to press. Amodal: the arm never
+  hides it. Only for single-target tasks; multi-step tasks (all gears, kitting lists, button
+  sequences) and reach have no mask. ``FrankaEnv.render_target_mask`` gives the same image live.
 * ``cond.<key>``: the episode's conditioning variables (e.g. ``cond.target`` = nail index).
 * ``next.reward``, ``next.success``, ``next.done``.
 * ``task``: the natural-language instruction, e.g. "pick up the hammer and hit the leftmost nail".
@@ -28,7 +33,10 @@ import mujoco
 import numpy as np
 
 import franka_sim
+from franka_sim.masks import render_mask, target_geoms
 from franka_sim.recording import dataset_info, iter_episodes
+
+MASK_KEY = "observation.images.target_mask"
 
 ROBOT_KEYS = {"joint_pos", "joint_vel", "gripper_width", "ee_pos", "ee_quat"}
 JOINT_NAMES = [f"joint{i}" for i in range(1, 8)]
@@ -78,11 +86,14 @@ class _Renderer:
         if isinstance(task_kwargs, str):
             task_kwargs = json.loads(task_kwargs)
         self.env = franka_sim.make(info["task"], task_kwargs=task_kwargs, image_size=image_size)
+        self.task = self.env.task
         self.model = self.env.model
         self.data = mujoco.MjData(self.model)
         self.renderer = mujoco.Renderer(self.model, *image_size)
 
-    def render(self, states: dict, t: int, cameras: Sequence[str]) -> dict[str, np.ndarray]:
+    def render(self, states: dict, t: int, cameras: Sequence[str],
+               mask: tuple[str, np.ndarray] | None = None) -> dict[str, np.ndarray]:
+        """RGB per camera; plus ``MASK_KEY`` when ``mask = (camera, target geom ids)``."""
         d = self.data
         d.qpos[:], d.qvel[:] = states["qpos"][t], states["qvel"][t]
         d.mocap_pos[:], d.mocap_quat[:] = states["mocap_pos"][t], states["mocap_quat"][t]
@@ -91,6 +102,9 @@ class _Renderer:
         for cam in cameras:
             self.renderer.update_scene(d, camera=cam)
             out[cam] = self.renderer.render().copy()
+        if mask is not None:
+            m = render_mask(self.renderer, d, mask[0], mask[1])
+            out[MASK_KEY] = np.repeat(m[..., None].astype(np.uint8) * 255, 3, axis=2)
         return out
 
     def close(self):
@@ -101,7 +115,8 @@ class _Renderer:
 def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
             cameras: Sequence[str] = ("front", "wrist"), image_size: tuple[int, int] = (256, 256),
             action: str = "joint_pos", use_videos: bool = True, only_success: bool = True,
-            encoder_preset: int | None = 10, progress: Callable[[str], None] | None = print):
+            mask_camera: str | None = "top", encoder_preset: int | None = 10,
+            progress: Callable[[str], None] | None = print):
     """Write every (successful) episode of ``hdf5_paths`` into a new LeRobot dataset at ``root``.
 
     All files must come from the same task configuration (same observation layout). Returns the
@@ -120,9 +135,15 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
 
     first = next(iter_episodes(paths[0], only_success=only_success))
     features, env_keys = build_features(first, cameras, image_size, use_videos)
+    renderer = _Renderer(info, image_size) if cameras or mask_camera else None
+    with_mask = mask_camera is not None and renderer.task.mask_bodies(first["cond"]) is not None
+    if with_mask:
+        features[MASK_KEY] = {"dtype": "image", "shape": (*image_size, 3), "names": ["height", "width", "channels"]}
     features["action"]["names"] = features[f"action.{action}"]["names"]
     root = Path(root)
     if root.exists():
+        if renderer is not None:
+            renderer.close()
         raise FileExistsError(f"{root} already exists; choose a new --root or delete it")
     kwargs = {}
     if use_videos and encoder_preset is not None:
@@ -132,7 +153,6 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
         kwargs["rgb_encoder"] = RGBEncoderConfig(preset=encoder_preset)
     ds = LeRobotDataset.create(repo_id=repo_id, fps=fps, features=features, root=root, robot_type="franka_panda",
                                use_videos=use_videos, image_writer_threads=4, **kwargs)
-    renderer = _Renderer(info, image_size) if cameras else None
     n_eps = 0
     try:
         for path in paths:
@@ -147,6 +167,8 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                 act = {"joint_pos": np.concatenate([cmd["joint_pos"], grip], 1).astype(np.float32),
                        "ee_pose": np.concatenate([cmd["ee_pose"], grip], 1).astype(np.float32)}
                 cond = {k: np.atleast_1d(np.asarray(v)) for k, v in ep["cond"].items()}
+                mask = (mask_camera, target_geoms(renderer.model, renderer.task.mask_bodies(ep["cond"]))) \
+                    if with_mask else None
                 for t in range(T):
                     frame = {
                         "observation.state": state[t],
@@ -163,8 +185,8 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                     for k, v in cond.items():
                         frame[f"cond.{k}"] = v.astype(np.int64 if features[f"cond.{k}"]["dtype"] == "int64" else np.float32)
                     if renderer is not None:
-                        for cam, img in renderer.render(ep["states"], t, cameras).items():
-                            frame[f"observation.images.{cam}"] = img
+                        for key, img in renderer.render(ep["states"], t, cameras, mask).items():
+                            frame[key if key == MASK_KEY else f"observation.images.{key}"] = img
                     ds.add_frame(frame)
                 ds.save_episode(parallel_encoding=False)  # a process pool per episode costs seconds
                 n_eps += 1
