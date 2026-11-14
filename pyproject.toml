@@ -26,6 +26,12 @@ video = [
 lerobot = [
     "lerobot[dataset]>=0.7",
 ]
+server = [
+    "fastapi>=0.115",
+    "msgpack>=1.0",
+    "uvicorn>=0.30",
+    "websockets>=13",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

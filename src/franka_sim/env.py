@@ -164,11 +164,16 @@ class FrankaEnv:
         self.last_command["gripper"][ids] = 0.0
         return obs, self._info()
 
-    def step(self, action: np.ndarray):
-        """Apply a ``(num_envs, action_dim)`` action. Returns ``obs, reward, terminated, truncated, info``."""
-        action = np.asarray(action, dtype=np.float64).reshape(self.num_envs, self.action_dim)
+    def step(self, action: np.ndarray, action_mode: str | None = None):
+        """Apply a ``(num_envs, action_dim)`` action. Returns ``obs, reward, terminated, truncated, info``.
+
+        ``action_mode`` overrides the env's mode for this step only (the action then has that mode's
+        dimension); modes can be mixed freely from step to step.
+        """
+        mode = self.action_mode if action_mode is None else canonical_mode(action_mode)
+        action = np.asarray(action, dtype=np.float64).reshape(self.num_envs, ACTION_DIMS[mode])
         prev = self.ctrl
-        self.ctrl = self._action_to_ctrl(action)
+        self.ctrl = self._action_to_ctrl(action, mode)
         self._advance(prev, self.ctrl)
         self.elapsed_steps += 1
         ev = self.task.evaluate(self.sim)
@@ -185,10 +190,10 @@ class FrankaEnv:
         return obs, ev.reward, terminated, truncated, info
 
     # ------------------------------------------------------------------------------------------
-    def _action_to_ctrl(self, action: np.ndarray) -> np.ndarray:
+    def _action_to_ctrl(self, action: np.ndarray, mode: str) -> np.ndarray:
         q_meas = self.sim.read("qpos")[:, self.arm_qadr]
         grip = action[:, -1]
-        cmd = self.controller.compute(self.action_mode, action[:, :-1], q_meas)
+        cmd = self.controller.compute(mode, action[:, :-1], q_meas)
         ctrl = self.ctrl.copy()
         ctrl[:, self.arm_act] = cmd["joint_pos"]
         ctrl[:, self.grip_act] = robot.gripper_ctrl(grip)

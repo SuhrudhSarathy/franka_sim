@@ -14,6 +14,7 @@ Both backends use the same Python API, which is built for behavior cloning. You 
 uv sync                     # CPU backend
 uv sync --extra warp        # + MuJoCo Warp backend
 uv sync --extra video       # + mp4 writing for the scripts
+uv sync --extra server      # + proxy-robot server and client (see "Proxy robot")
 ```
 
 **Headless servers.** MuJoCo renders through OpenGL. On Linux with no display (`DISPLAY` and
@@ -109,6 +110,48 @@ env = franka_sim.make("reach", num_envs=4096, backend="warp",
 * Physics agrees with the CPU backend to float32 precision (see `tests/test_warp.py`).
 
 Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp --num-envs 1 64 1024`.
+
+## Proxy robot
+
+`scripts/serve.py` runs one simulated Franka the way a real robot runs behind its driver:
+- **Clock.** The simulation advances in real time on its own clock (20 Hz control by default).
+- **Viewer.** MuJoCo's native viewer shows it live. Double-click a body to select it, then
+  Ctrl + right-drag to push it. Closing the window stops the server.
+- **Model API.** Models connect over a WebSocket.
+
+```sh
+uv run --extra server mjpython scripts/serve.py --task hammer_nails   # macOS: the viewer needs mjpython
+uv run --extra server python scripts/serve.py --task hammer_nails     # Linux / Windows
+uv run --extra server python scripts/serve.py --task kitting --headless --paused   # no window, lockstep
+```
+
+```python
+from franka_sim.client import RobotClient
+
+with RobotClient("ws://127.0.0.1:8000/ws", cameras=("front", "wrist"), image_size=(224, 224)) as robot:
+    obs = robot.observe()   # joint_pos, joint_vel, gripper_width, ee_pos, ee_quat, rgb_front, rgb_wrist, instruction
+    robot.act([0, 0.005, 0, 0, 0, 0, 0.0], mode="delta_ee_pose")   # real time: streamed commands
+
+    robot.pause()           # lockstep: each step advances exactly one control period
+    obs, info = robot.reset(seed=100_000, options={"target": 2}, task="hammer_nails")
+    obs, reward, terminated, truncated, info = robot.step(action, mode="joint_pos")
+    robot.run()
+```
+
+In real time, commands are held as a robot driver holds them:
+- Absolute targets (`joint_pos`, `ee_pose`) stay in force until the next command.
+- `joint_vel` stops after a 0.25 s watchdog.
+- Deltas (`delta_ee_pose`, `joint_delta`) sent between two ticks are summed and applied once.
+- With no command, the arm holds still.
+
+Any action mode can be used on any command.
+
+Observations follow the benchmark's `vision` protocol. Pass `privileged=True` for the task's
+simulator state (oracle use only). `GET /api/state` returns the robot and episode status as JSON.
+
+Everything runs on one thread (MuJoCo's OpenGL needs it), and the network layer queues requests
+between control ticks. The scripted expert solves tasks through the socket in lockstep, at about
+500 steps/s headless and 260 with the viewer.
 
 ## Tasks
 
@@ -344,6 +387,8 @@ src/franka_sim/
   gym_env.py        single-env gymnasium wrapper
   scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
   controller.py     action modes -> joint commands: mink differential IK, velocity limits, anti-windup
+  server/           proxy robot: SimRobot (held commands, watchdog), RobotServer (real-time loop, viewer, WebSocket API)
+  client.py         RobotClient for the proxy robot
   ik.py             damped-least-squares IK (start-pose sampling) and quaternion helpers
   benchmark.py      benchmark suite, seeds, observation protocol, evaluation loop
   masks.py          binary target masks from segmentation rendering
@@ -353,7 +398,7 @@ src/franka_sim/
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)
   lerobot_export.py HDF5 demos -> LeRobot dataset
-scripts/            evaluate.py (benchmark evaluation), record_demos.py, replay.py, make_videos.py,
+scripts/            serve.py (proxy robot), evaluate.py (benchmark evaluation), record_demos.py, replay.py, make_videos.py,
                     to_lerobot.py, build_datasets.py, benchmark.py (physics speed, not the task benchmark)
 ```
 
