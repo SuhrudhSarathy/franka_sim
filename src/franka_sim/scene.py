@@ -14,6 +14,21 @@ if TYPE_CHECKING:
 
 TABLE_HEIGHT = 0.0  # objects rest on the floor plane at z = 0; the robot base sits at the origin.
 
+# Fixed cameras: name -> (position, point looked at). The robot base is at the origin, facing +x;
+# the robot's left is +y.
+_WORKSPACE = (0.35, 0.0, 0.25)
+FIXED_CAMERAS = {
+    "front": ((1.4, 0.0, 1.05), _WORKSPACE),  # facing the robot
+    "side": ((0.45, -1.15, 0.65), _WORKSPACE),  # from the robot's right
+    "top": ((0.5, 0.0, 1.4), _WORKSPACE),  # bird's eye
+    "left": ((0.45, 1.15, 0.65), _WORKSPACE),  # from the robot's left
+    # Over the robot's right shoulder, the view of a teleoperator standing behind it.
+    "back": ((-0.3, -0.65, 1.15), (0.5, 0.05, 0.0)),
+    "angle": ((1.0, 0.7, 0.75), (0.45, 0.0, 0.1)),  # three-quarter view from the front left
+}
+# Every camera in the scene (``wrist`` is mounted on the hand).
+CAMERAS = (*FIXED_CAMERAS, "wrist")
+
 
 def _look_at_quat(pos, target, up=(0.0, 0.0, 1.0)) -> np.ndarray:
     """Quaternion (wxyz) for a camera at ``pos`` looking at ``target`` (MuJoCo cameras look along -z)."""
@@ -43,6 +58,13 @@ def build_spec(task: Task | None = None, *, image_size: tuple[int, int] = (480, 
     # Gravity compensation keeps the position-controlled arm from sagging, so IK targets are tracked.
     for name in robot.ROBOT_BODIES:
         spec.body(name).gravcomp = 1.0
+
+    # Critically damped arm servos (Menagerie's are underdamped and the wrist rings; see robot.ARM_KV).
+    for name, kp, kv in zip(robot.ARM_ACTUATORS, robot.ARM_KP, robot.ARM_KV):
+        act = spec.actuator(name)
+        act.gainprm[0] = kp
+        act.biasprm[1] = -kp
+        act.biasprm[2] = -kv
 
     # The menagerie gripper is a weak position servo (kp=350): it squeezes a 2 cm handle with only
     # ~4 N, so tools pivot in the grasp. A stiffer servo grips with ~30-40 N per finger (the real
@@ -81,14 +103,9 @@ def build_spec(task: Task | None = None, *, image_size: tuple[int, int] = (480, 
     world.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[0, 0, 0.05], material="floor",
                    contype=1, conaffinity=1, condim=3)
 
-    workspace = np.array([0.35, 0.0, 0.25])
-    for name, pos in {
-        "front": [1.4, 0.0, 1.05],
-        "side": [0.45, -1.15, 0.65],
-        "top": [0.5, 0.0, 1.4],
-    }.items():
+    for name, (pos, target) in FIXED_CAMERAS.items():
         up = (1.0, 0.0, 0.0) if name == "top" else (0.0, 0.0, 1.0)
-        world.add_camera(name=name, pos=pos, quat=_look_at_quat(pos, workspace, up), fovy=50)
+        world.add_camera(name=name, pos=list(pos), quat=_look_at_quat(pos, target, up), fovy=50)
     # Wrist camera: mounted on the hand, looking along the gripper axis (+z of the hand frame).
     wrist_pos = [-0.075, 0.0, 0.045]
     spec.body("hand").add_camera(name="wrist", pos=wrist_pos,

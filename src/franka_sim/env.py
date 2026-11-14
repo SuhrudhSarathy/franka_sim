@@ -7,17 +7,13 @@ import numpy as np
 
 from franka_sim import robot
 from franka_sim.backends import Backend, make_backend
-from franka_sim.ik import DiffIK, axis_angle_to_quat, mat_to_quat, quat_mul
+from franka_sim.controller import ACTION_ALIASES, ACTION_DIMS, ArmController, canonical_mode
+from franka_sim.ik import DiffIK, mat_to_quat, quat_mul
 from franka_sim.masks import render_mask, target_geoms
-from franka_sim.scene import build_spec
+from franka_sim.scene import CAMERAS, build_spec
 from franka_sim.tasks import Task, make_task
 
-ACTION_DIMS = {
-    "ee_delta": 7,  # dx dy dz (m), rx ry rz (rad, world-frame rotation vector), gripper
-    "ee_pose": 8,  # x y z, qw qx qy qz (world frame), gripper
-    "joint_pos": 8,  # 7 absolute joint targets (rad), gripper
-    "joint_delta": 8,  # 7 joint target offsets from the current joint positions (rad), gripper
-}
+__all__ = ["ACTION_ALIASES", "ACTION_DIMS", "CAMERAS", "FrankaEnv"]
 
 
 class FrankaEnv:
@@ -30,10 +26,21 @@ class FrankaEnv:
         task: task name (see ``franka_sim.tasks.TASKS``) or a ``Task`` instance.
         num_envs: number of parallel worlds.
         backend: ``"cpu"`` (MuJoCo) or ``"warp"`` (MuJoCo Warp).
-        action_mode: one of ``ACTION_DIMS``.
+        action_mode: one of ``ACTION_DIMS`` (see ``franka_sim.controller``): ``joint_pos``,
+            ``joint_vel``, ``joint_delta``, ``ee_pose`` or ``delta_ee_pose`` (``ee_delta`` is an
+            alias of ``delta_ee_pose``).
         control_freq: policy frequency in Hz; physics runs at 500 Hz.
-        cameras: camera names to render into observations (``rgb_<name>``): any of
-            ``front``, ``side``, ``top``, ``wrist``.
+        interp_substeps: the servo set-points are interpolated from the previous command to the new
+            one across the control period, updated every ``interp_substeps`` physics steps (5 =
+            100 Hz). ``None`` holds each command for the whole period (a staircase).
+        velocity_feedforward: gain (0..1, or a bool) of the velocity feedforward: the servo
+            set-points lead the command by ``gain * (kv + damping) / kp * velocity``. At 1 this
+            cancels the position servos' tracking lag, so every joint follows the commanded path in
+            step (without it each lags by its own time constant and the hand drifts several mm off
+            straight-line paths). The cost: a command that jumps far in one step is overshot (~7 mm
+            for a 10 cm jump at 1, ~1 mm at 0.5); stream commands smoothly, or lower the gain.
+        cameras: camera names to render into observations (``rgb_<name>``), any of
+            ``franka_sim.scene.CAMERAS``.
         image_size: ``(height, width)`` of rendered observations.
         max_episode_steps: overrides the task's default horizon.
         init_noise: std-dev of Gaussian noise added to the start joint configuration on reset.
@@ -44,13 +51,13 @@ class FrankaEnv:
     """
 
     def __init__(self, task: str | Task = "reach", *, num_envs: int = 1, backend: str = "cpu",
-                 action_mode: str = "ee_delta", control_freq: float = 20.0, cameras=(),
+                 action_mode: str = "delta_ee_pose", control_freq: float = 20.0,
+                 interp_substeps: int | None = 5, velocity_feedforward: float = 1.0, cameras=(),
                  image_size: tuple[int, int] = (128, 128), max_episode_steps: int | None = None,
                  init_noise: float = 0.02, randomize_start: bool = True,
                  start_pos_range=(0.08, 0.15, 0.08), start_yaw_range: float = 0.5, seed: int | None = None, task_kwargs: dict | None = None,
-                 backend_kwargs: dict | None = None):
-        if action_mode not in ACTION_DIMS:
-            raise ValueError(f"unknown action_mode {action_mode!r}; expected one of {list(ACTION_DIMS)}")
+                 backend_kwargs: dict | None = None, controller_kwargs: dict | None = None):
+        action_mode = canonical_mode(action_mode)
         self.task = make_task(task, **(task_kwargs or {}))
         self.num_envs = num_envs
         self.action_mode = action_mode
@@ -72,6 +79,13 @@ class FrankaEnv:
         m = self.model
         self.control_dt = 1.0 / control_freq
         self.nsubsteps = max(1, round(self.control_dt / m.opt.timestep))
+        # Interpolation chunks: (fraction of the way to the new command, physics steps).
+        nchunks = 1 if not interp_substeps else max(1, self.nsubsteps // interp_substeps)
+        bounds = np.linspace(0, self.nsubsteps, nchunks + 1).round().astype(int)
+        self._chunks = [((k + 1) / nchunks, int(b - a)) for k, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]))]
+        unknown = set(self.cameras) - {m.cam(i).name for i in range(m.ncam)}
+        if unknown:
+            raise ValueError(f"unknown cameras {sorted(unknown)}; available: {[m.cam(i).name for i in range(m.ncam)]}")
         self.arm_qadr = np.array([m.jnt_qposadr[m.joint(j).id] for j in robot.ARM_JOINTS])
         self.arm_dadr = np.array([m.jnt_dofadr[m.joint(j).id] for j in robot.ARM_JOINTS])
         self.finger_qadr = np.array([m.jnt_qposadr[m.joint(j).id] for j in robot.FINGER_JOINTS])
@@ -79,6 +93,11 @@ class FrankaEnv:
         self.grip_act = m.actuator(robot.GRIPPER_ACTUATOR).id
         self.ee_site = m.site(robot.EE_SITE).id
         self.ctrl_lo, self.ctrl_hi = m.actuator_ctrlrange[:, 0].copy(), m.actuator_ctrlrange[:, 1].copy()
+        # Servo lag time constants: a position servo tracking a ramp of velocity v trails it by tau * v.
+        kp, kv = m.actuator_gainprm[self.arm_act, 0], -m.actuator_biasprm[self.arm_act, 2]
+        self._servo_tau = float(velocity_feedforward) * (kv + m.dof_damping[self.arm_dadr]) / kp
+        self.controller = ArmController(num_envs, self.control_dt, self.ctrl_lo[self.arm_act],
+                                        self.ctrl_hi[self.arm_act], **(controller_kwargs or {}))
 
         self._rng = np.random.default_rng(seed)
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
@@ -136,6 +155,7 @@ class FrankaEnv:
             self.sim.write(field, values, ids)
         self.sim.forward()
         self.ctrl[ids] = ctrl
+        self.controller.reset(ids, qpos[:, self.arm_qadr])
         self.elapsed_steps[ids] = 0
 
         obs = self._observe()
@@ -147,8 +167,9 @@ class FrankaEnv:
     def step(self, action: np.ndarray):
         """Apply a ``(num_envs, action_dim)`` action. Returns ``obs, reward, terminated, truncated, info``."""
         action = np.asarray(action, dtype=np.float64).reshape(self.num_envs, self.action_dim)
+        prev = self.ctrl
         self.ctrl = self._action_to_ctrl(action)
-        self.sim.step(self.ctrl, self.nsubsteps)
+        self._advance(prev, self.ctrl)
         self.elapsed_steps += 1
         ev = self.task.evaluate(self.sim)
         obs = self._observe()
@@ -165,44 +186,27 @@ class FrankaEnv:
 
     # ------------------------------------------------------------------------------------------
     def _action_to_ctrl(self, action: np.ndarray) -> np.ndarray:
-        qpos = self.sim.read("qpos")
-        mode = self.action_mode
+        q_meas = self.sim.read("qpos")[:, self.arm_qadr]
         grip = action[:, -1]
-        joint_targets = np.empty((self.num_envs, 7))
-        ee_targets = np.empty((self.num_envs, 7))
-        if mode in ("joint_pos", "joint_delta"):
-            joint_targets[:] = action[:, :7]
-            if mode == "joint_delta":
-                joint_targets += qpos[:, self.arm_qadr]
-            for i in range(self.num_envs):
-                q = qpos[i].copy()
-                q[self.arm_qadr] = joint_targets[i]
-                p, quat = self.ik.site_pose(q)
-                ee_targets[i] = np.concatenate([p, quat])
-        else:
-            if mode == "ee_pose":
-                pos, quat = action[:, :3], action[:, 3:7]
-                quat = quat / np.linalg.norm(quat, axis=-1, keepdims=True)
-            else:  # ee_delta, relative to the measured end-effector pose
-                site_pos = self.sim.read("site_xpos")[:, self.ee_site]
-                site_mat = self.sim.read("site_xmat")[:, self.ee_site]
-                pos = site_pos + action[:, :3]
-                quat = np.stack([
-                    quat_mul(axis_angle_to_quat(action[i, 3:6]), mat_to_quat(site_mat[i]))
-                    for i in range(self.num_envs)
-                ])
-            for i in range(self.num_envs):
-                joint_targets[i] = self.ik.solve(qpos[i], pos[i], quat[i])
-            ee_targets[:] = np.concatenate([pos, quat], axis=-1)
-
+        cmd = self.controller.compute(self.action_mode, action[:, :-1], q_meas)
         ctrl = self.ctrl.copy()
-        ctrl[:, self.arm_act] = joint_targets
+        ctrl[:, self.arm_act] = cmd["joint_pos"]
         ctrl[:, self.grip_act] = robot.gripper_ctrl(grip)
         ctrl = np.clip(ctrl, self.ctrl_lo, self.ctrl_hi)
         self.last_command["joint_pos"][:] = ctrl[:, self.arm_act]
-        self.last_command["ee_pose"][:] = ee_targets
+        self.last_command["ee_pose"][:] = cmd["ee_pose"]
         self.last_command["gripper"][:] = np.clip(grip, 0.0, 1.0)
         return ctrl
+
+    def _advance(self, prev_ctrl: np.ndarray, ctrl: np.ndarray) -> None:
+        """Run one control period, ramping the arm set-points from ``prev_ctrl`` to ``ctrl``."""
+        arm = self.arm_act
+        lead = self._servo_tau * self.controller.v_cmd  # velocity feedforward (zero when disabled)
+        for alpha, n in self._chunks:
+            c = ctrl.copy()
+            c[:, arm] = np.clip(prev_ctrl[:, arm] + alpha * (ctrl[:, arm] - prev_ctrl[:, arm]) + lead,
+                                self.ctrl_lo[arm], self.ctrl_hi[arm])
+            self.sim.step(c, n)
 
     def _observe(self) -> dict[str, np.ndarray]:
         qpos = self.sim.read("qpos")

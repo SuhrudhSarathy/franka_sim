@@ -37,9 +37,9 @@ HORIZONS: dict[str, int] = {
     "reach": 100,
     "hammer_nails": 200, "hammer_nails_long": 350,
     "buttons": 100, "buttons_long": 300,
-    "peg_insertion": 250, "peg_insertion_long": 750,
-    "gear_assembly": 300, "gear_assembly_long": 1000,
-    "kitting": 400, "kitting_long": 1250,
+    "peg_insertion": 250, "peg_insertion_long": 700,
+    "gear_assembly": 250, "gear_assembly_long": 1000,
+    "kitting": 400, "kitting_long": 1500,
     "pcb_insertion": 250,
 }
 

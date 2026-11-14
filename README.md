@@ -28,7 +28,7 @@ with the NVIDIA driver, or Mesa's software EGL otherwise. Two cases need a manua
 import numpy as np
 import franka_sim
 
-env = franka_sim.make("reach", num_envs=8, backend="cpu", action_mode="ee_delta",
+env = franka_sim.make("reach", num_envs=8, backend="cpu", action_mode="delta_ee_pose",
                       cameras=("front", "wrist"), image_size=(128, 128))
 obs, info = env.reset(seed=0)          # every array is batched: obs["ee_pos"].shape == (8, 3)
 for _ in range(100):
@@ -46,20 +46,50 @@ The last action dimension is always the gripper closure in `[0, 1]`, where 0 is 
 
 | `action_mode` | dims | meaning |
 |---|---|---|
-| `ee_delta` | 7 | `dx dy dz` (m), `rx ry rz` (world-frame rotation vector), gripper |
-| `ee_pose` | 8 | absolute `x y z`, quaternion `w x y z`, gripper |
-| `joint_pos` | 8 | 7 absolute joint targets, gripper |
-| `joint_delta` | 8 | 7 joint offsets from the current joint positions, gripper |
+| `joint_pos` | 8 | 7 absolute joint targets (rad), gripper |
+| `joint_vel` | 8 | 7 joint velocities (rad/s), gripper |
+| `joint_delta` | 8 | 7 joint offsets (rad) from the measured joint positions, gripper |
+| `ee_pose` | 8 | absolute `x y z` (m), quaternion `w x y z` (world frame), gripper |
+| `delta_ee_pose` | 7 | `dx dy dz` (m) and `rx ry rz` (rotation vector, rad), both world frame, from the commanded pose, gripper |
 
-End-effector commands are converted to joint targets by damped-least-squares IK. The arm's joint
-position actuators then track those targets, with gravity compensation. After every step,
-`env.last_command` holds the command in each representation (`joint_pos`, `ee_pose`, `gripper`), so
-a dataset can store all of them.
+`ee_delta` is still accepted as an alias of `delta_ee_pose`.
+
+How actions become motion (`franka_sim/controller.py`):
+
+* **Cartesian modes** are solved by differential IK with [mink](https://github.com/kevinzakka/mink):
+  a QP with the end-effector task, a light posture term for the redundant joint, and the joint limits
+  as hard constraints.
+* **Every mode** moves a commanded joint configuration within the Panda's joint velocity limits (and,
+  with `controller_kwargs={"accel_scale": 0.5}`, its acceleration limits too).
+* **Incremental modes** (`joint_vel`, `delta_ee_pose`) build on the previous *command*, not the
+  measured state, so the arm does not drift from tracking lag. If contact holds the arm back by
+  more than 0.2 rad, the reference is pulled back toward the measured state, so it never winds up.
+* **Servo tracking.** The arm's position servos are critically damped and gravity compensated.
+  Within each control period their set-point ramps from the previous command to the new one (at
+  100 Hz, `interp_substeps=5`). A velocity feedforward (`velocity_feedforward=1.0`) cancels their
+  tracking lag: a 0.1 m/s Cartesian move is followed with no lag and a constant speed, and with
+  sub-millimetre deviation from the line. Command smoothly. A target that jumps 10 cm in a single
+  step is overshot by about 7 mm (about 1 mm with `velocity_feedforward=0.5`).
+
+After every step, `env.last_command` holds the command in each representation (`joint_pos`,
+`ee_pose`, `gripper`), so a dataset can store all of them.
 
 ### Observations
 
 `joint_pos`, `joint_vel`, `gripper_width`, `ee_pos`, `ee_quat` (wxyz), any task-specific keys, and
-`rgb_<camera>` for each requested camera. The cameras are `front`, `side`, `top` and `wrist`.
+`rgb_<camera>` for each requested camera.
+
+| camera | view |
+|---|---|
+| `front` | facing the robot |
+| `side` | from the robot's right |
+| `left` | from the robot's left |
+| `top` | bird's eye |
+| `back` | over the robot's right shoulder, as a teleoperator standing behind it would see |
+| `angle` | three-quarter view from the front left, close on the workspace |
+| `wrist` | on the hand, looking along the gripper |
+
+`franka_sim.scene.CAMERAS` lists them. Pass any subset as `cameras=(...)`.
 
 ## Backends
 
@@ -74,8 +104,8 @@ env = franka_sim.make("reach", num_envs=4096, backend="warp",
 * `nconmax` and `njmax` are per-world buffer sizes. The backend warns when the contact buffer
   overflows.
 * Rendering and IK run on the host. To render or solve IK for a world, its state is copied into an
-  `MjData`, so camera observations and `ee_*` action modes cost host time per env. For large
-  `num_envs`, use `joint_pos`/`joint_delta` actions and no cameras.
+  `MjData`, so camera observations and Cartesian action modes cost host time per env (about
+  0.1 ms per mink QP iteration). For large `num_envs`, use joint-space actions and no cameras.
 * Physics agrees with the CPU backend to float32 precision (see `tests/test_warp.py`).
 
 Benchmark: `uv run --extra warp python scripts/benchmark.py --backends cpu warp --num-envs 1 64 1024`.
@@ -294,17 +324,17 @@ uv run python scripts/evaluate.py --policy my_pkg.policies:make --policy-kwargs 
 
 | task | kind | scripted expert success | expert steps (mean) | horizon |
 |---|---|---|---|---|
-| hammer_nails | single | 1.00 | 81 | 200 |
-| hammer_nails_long | long | 1.00 | 142 | 350 |
-| buttons | single | 1.00 | 35 | 100 |
-| buttons_long | long | 1.00 | 111 | 300 |
-| peg_insertion | single | 1.00 | 98 | 250 |
-| peg_insertion_long | long | 1.00 | 320 | 750 |
-| gear_assembly | single | 1.00 | 114 | 300 |
-| gear_assembly_long | long | 1.00 | 429 | 1000 |
-| kitting | single | 1.00 | 113 | 400 |
-| kitting_long | long | 1.00 | 568 | 1250 |
-| pcb_insertion | single | 1.00 | 114 | 250 |
+| hammer_nails | single | 1.00 | 79 | 200 |
+| hammer_nails_long | long | 1.00 | 132 | 350 |
+| buttons | single | 1.00 | 33 | 100 |
+| buttons_long | long | 1.00 | 105 | 300 |
+| peg_insertion | single | 1.00 | 94 | 250 |
+| peg_insertion_long | long | 1.00 | 304 | 700 |
+| gear_assembly | single | 1.00 | 106 | 250 |
+| gear_assembly_long | long | 1.00 | 396 | 1000 |
+| kitting | single | 1.00 | 120 | 400 |
+| kitting_long | long | 1.00 | 561 | 1500 |
+| pcb_insertion | single | 1.00 | 109 | 250 |
 
 ## Layout
 
@@ -313,7 +343,8 @@ src/franka_sim/
   env.py            FrankaEnv: batched reset/step, action modes, observations, rendering
   gym_env.py        single-env gymnasium wrapper
   scene.py          MjSpec scene: Panda (MuJoCo Menagerie, MJX variant) + floor, lights, cameras
-  ik.py             damped-least-squares IK
+  controller.py     action modes -> joint commands: mink differential IK, velocity limits, anti-windup
+  ik.py             damped-least-squares IK (start-pose sampling) and quaternion helpers
   benchmark.py      benchmark suite, seeds, observation protocol, evaluation loop
   masks.py          binary target masks from segmentation rendering
   backends/         cpu.py (MuJoCo), warp.py (MuJoCo Warp)
@@ -328,4 +359,5 @@ scripts/            evaluate.py (benchmark evaluation), record_demos.py, replay.
 
 The Panda model is `mjx_panda.xml` from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
 (Apache-2.0, see `src/franka_sim/assets/panda/LICENSE`). The scene builder adds gravity
-compensation to the arm.
+compensation to the arm, critically damps its joint servos (Menagerie's wrist servos ring at a
+damping ratio of about 0.3) and stiffens the gripper.
