@@ -12,6 +12,8 @@ import numpy as np
 
 
 def _default(obj):
+    if isinstance(obj, np.ndarray) and obj.dtype == object:  # e.g. instructions: strings
+        return {"__obj__": True, "shape": list(obj.shape), "items": obj.ravel().tolist()}
     if isinstance(obj, np.ndarray):
         arr = np.ascontiguousarray(obj)
         return {"__nd__": True, "dtype": arr.dtype.str, "shape": list(arr.shape), "data": arr.tobytes()}
@@ -23,6 +25,10 @@ def _default(obj):
 
 
 def _hook(obj):
+    if obj.get("__obj__"):
+        out = np.empty(len(obj["items"]), dtype=object)
+        out[:] = obj["items"]
+        return out.reshape(obj["shape"])
     if obj.get("__nd__"):
         return np.frombuffer(obj["data"], dtype=np.dtype(obj["dtype"])).reshape(obj["shape"])
     return obj

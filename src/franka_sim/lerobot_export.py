@@ -19,6 +19,12 @@ Per frame the dataset holds:
   hides it. Only for single-target tasks; multi-step tasks (all gears, kitting lists, button
   sequences) and reach have no mask. ``FrankaEnv.render_target_mask`` gives the same image live.
 * ``cond.<key>``: the episode's conditioning variables (e.g. ``cond.target`` = nail index).
+* DAgger recordings (``franka_sim.dagger``) add ``dagger.actor`` (0 learner, 1 human, 2 scripted
+  expert) and ``dagger.intervention`` (a human was in control) per frame, so training can weight or
+  mask the loss without cutting episodes apart; plain demo files in the same dataset count as
+  ``actor = 2``. When every file has scripted expert labels, ``expert.joint_pos`` and
+  ``expert.ee_pose`` (8 each, gripper included) hold them, and ``labels="expert"`` makes them the
+  ``action``.
 * ``next.reward``, ``next.success``, ``next.done``.
 * ``task``: the natural-language instruction, e.g. "pick up the hammer and hit the leftmost nail".
 """
@@ -48,6 +54,18 @@ def _env_state_keys(obs: dict) -> list[str]:
 
 def _names(key: str, dim: int) -> list[str]:
     return [key] if dim == 1 else [f"{key}_{j}" for j in range(dim)]
+
+
+def _file_kind(path: Path) -> tuple[bool, bool]:
+    """(has DAgger actor/intervention arrays, has scripted expert labels) of a recording."""
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        demos = list(f["data"].keys())
+        if not demos:
+            return False, False
+        g = f["data"][demos[0]]
+        return "actor" in g, "expert" in g and "joint_pos" in g["expert"]
 
 
 def build_features(sample_ep: dict, cameras: Sequence[str], image_size: tuple[int, int], use_videos: bool) -> dict:
@@ -114,19 +132,30 @@ class _Renderer:
 
 def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
             cameras: Sequence[str] = ("front", "wrist"), image_size: tuple[int, int] = (256, 256),
-            action: str = "joint_pos", use_videos: bool = True, only_success: bool = True,
+            action: str = "joint_pos", labels: str = "executed", use_videos: bool = True, only_success: bool = True,
             mask_camera: str | None = "top", encoder_preset: int | None = 10,
             progress: Callable[[str], None] | None = print):
     """Write every (successful) episode of ``hdf5_paths`` into a new LeRobot dataset at ``root``.
 
     All files must come from the same task configuration (same observation layout). Returns the
     finalized ``LeRobotDataset``; upload it with ``dataset.push_to_hub()``.
+
+    ``labels``: ``"executed"`` (``action`` = what was executed: the expert's commands in demos, the
+    operator's on intervention steps, the learner's own elsewhere) or ``"expert"`` (``action`` = the
+    scripted expert's label on every frame; needs DAgger files recorded with expert labels).
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     if action not in ("joint_pos", "ee_pose"):
         raise ValueError("action must be 'joint_pos' or 'ee_pose'")
+    if labels not in ("executed", "expert"):
+        raise ValueError("labels must be 'executed' or 'expert'")
     paths = [Path(p) for p in hdf5_paths]
+    kinds = [_file_kind(p) for p in paths]
+    with_dagger = any(k[0] for k in kinds)
+    with_expert = all(k[1] for k in kinds)
+    if labels == "expert" and not with_expert:
+        raise ValueError("labels='expert' needs scripted expert labels in every file (DAgger recordings)")
     infos = [dataset_info(p) for p in paths]
     if len({(i["task"], json.dumps(i.get("task_kwargs", {}), sort_keys=True)) for i in infos}) != 1:
         raise ValueError("all files must come from the same task configuration")
@@ -140,6 +169,12 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
     if with_mask:
         features[MASK_KEY] = {"dtype": "image", "shape": (*image_size, 3), "names": ["height", "width", "channels"]}
     features["action"]["names"] = features[f"action.{action}"]["names"]
+    if with_dagger:
+        features["dagger.actor"] = {"dtype": "int64", "shape": (1,), "names": None}
+        features["dagger.intervention"] = {"dtype": "bool", "shape": (1,), "names": None}
+    if with_expert:
+        for rep_ in ("joint_pos", "ee_pose"):
+            features[f"expert.{rep_}"] = {"dtype": "float32", "shape": (8,), "names": features[f"action.{rep_}"]["names"]}
     root = Path(root)
     if root.exists():
         if renderer is not None:
@@ -166,6 +201,18 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                 grip = cmd["gripper"].reshape(T, 1).astype(np.float32)
                 act = {"joint_pos": np.concatenate([cmd["joint_pos"], grip], 1).astype(np.float32),
                        "ee_pose": np.concatenate([cmd["ee_pose"], grip], 1).astype(np.float32)}
+                if "actor" in ep:
+                    actor = ep["actor"].astype(np.int64).reshape(T, 1)
+                    intervention = ep["intervention"].astype(bool).reshape(T, 1)
+                else:  # a plain demo file: recorded by the scripted expert
+                    actor = np.full((T, 1), 2, dtype=np.int64)
+                    intervention = np.zeros((T, 1), dtype=bool)
+                expert = None
+                if with_expert:
+                    eg = ep["expert"]["gripper"].reshape(T, 1).astype(np.float32)
+                    expert = {r: np.concatenate([ep["expert"][r], eg], 1).astype(np.float32)
+                              for r in ("joint_pos", "ee_pose")}
+                label = expert if labels == "expert" else act
                 cond = {k: np.atleast_1d(np.asarray(v)) for k, v in ep["cond"].items()}
                 mask = (mask_camera, target_geoms(renderer.model, renderer.task.mask_bodies(ep["cond"]))) \
                     if with_mask else None
@@ -174,7 +221,7 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                         "observation.state": state[t],
                         "observation.ee_pose": ee[t],
                         "observation.environment_state": env_state[t],
-                        "action": act[action][t],
+                        "action": label[action][t],
                         "action.joint_pos": act["joint_pos"][t],
                         "action.ee_pose": act["ee_pose"][t],
                         "next.reward": np.array([ep["rewards"][t]], dtype=np.float32),
@@ -182,6 +229,12 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                         "next.done": np.array([bool(ep["dones"][t])]),
                         "task": instruction,
                     }
+                    if with_dagger:
+                        frame["dagger.actor"] = actor[t]
+                        frame["dagger.intervention"] = intervention[t]
+                    if expert is not None:
+                        frame["expert.joint_pos"] = expert["joint_pos"][t]
+                        frame["expert.ee_pose"] = expert["ee_pose"][t]
                     for k, v in cond.items():
                         frame[f"cond.{k}"] = v.astype(np.int64 if features[f"cond.{k}"]["dtype"] == "int64" else np.float32)
                     if renderer is not None:

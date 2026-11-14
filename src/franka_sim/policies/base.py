@@ -44,15 +44,20 @@ class ScriptedPolicy:
     smooth.
 
     Args:
-        env: the ``FrankaEnv`` (must use ``action_mode="ee_pose"``).
+        env: the ``FrankaEnv`` (``action_mode="ee_pose"``, unless ``any_env_mode``).
         speed: default translation per step (m).
         noise: std-dev of Gaussian noise added to the commanded position (m), to diversify demos.
         seed: RNG seed for noise and per-episode variations.
+        any_env_mode: allow an env in another action mode. The actions are still ``ee_pose``: step
+            them with ``env.step(a, action_mode="ee_pose")`` or convert them with
+            ``env.convert_action`` (this is how DAgger uses the expert as a labeler).
     """
 
+    action_mode = "ee_pose"
+
     def __init__(self, env, speed: float = 0.02, yaw_speed: float = 0.15, noise: float = 0.0,
-                 seed: int | None = None):
-        if env.action_mode != "ee_pose":
+                 seed: int | None = None, any_env_mode: bool = False):
+        if env.action_mode != "ee_pose" and not any_env_mode:
             raise ValueError("scripted policies emit ee_pose actions; create the env with action_mode='ee_pose'")
         self.env = env
         self.n = env.num_envs
@@ -75,6 +80,18 @@ class ScriptedPolicy:
             self.cmd_pos[i] = obs["ee_pos"][i]
             self.cmd_yaw[i] = wrap_angle(quat_yaw(quat_mul(obs["ee_quat"][i], _conj(self.base_quat))))
             self.memory[i] = {}
+
+    def track(self, ee_pose: np.ndarray, env_ids=None) -> None:
+        """Re-anchor the smoothed command to the robot's actual commanded pose ``(N, 7)``.
+
+        The expert moves its command toward each target at a bounded speed, starting from its own
+        previous command. When something else drove the robot (a learner, a human), call this
+        before ``act`` so the expert's next action is a correction from where the robot really
+        is, not from where the expert had left it."""
+        ids = range(self.n) if env_ids is None else np.atleast_1d(env_ids)
+        for i in ids:
+            self.cmd_pos[i] = ee_pose[i, :3]
+            self.cmd_yaw[i] = wrap_angle(quat_yaw(quat_mul(ee_pose[i, 3:7], _conj(self.base_quat))))
 
     def plan(self, i: int, obs: dict, stage: int) -> tuple[Target, bool]:
         raise NotImplementedError

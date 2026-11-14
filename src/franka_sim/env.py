@@ -203,6 +203,24 @@ class FrankaEnv:
         self.last_command["gripper"][:] = np.clip(grip, 0.0, 1.0)
         return ctrl
 
+    def executed_action(self, mode: str | None = None) -> np.ndarray:
+        """The last step's command restated as a ``mode`` action (default: the env's mode),
+        gripper included: what to record as the label whoever (or whatever mode) produced it."""
+        mode = self.action_mode if mode is None else mode
+        return np.concatenate([self.controller.express(mode), self.last_command["gripper"][:, None]], axis=1)
+
+    def convert_action(self, action: np.ndarray, from_mode: str, to_mode: str | None = None) -> np.ndarray:
+        """Restate ``action`` (in ``from_mode``, at the current state) as a ``to_mode`` action
+        (default: the env's mode) without stepping, e.g. to label states with an expert that speaks
+        another action space. Executing the result in ``to_mode`` reproduces the same command."""
+        from_mode = canonical_mode(from_mode)
+        to_mode = self.action_mode if to_mode is None else to_mode
+        action = np.asarray(action, dtype=np.float64).reshape(self.num_envs, ACTION_DIMS[from_mode])
+        q_meas = self.sim.read("qpos")[:, self.arm_qadr]
+        out = self.controller.preview(from_mode, action[:, :-1], q_meas)
+        arm = self.controller.express(to_mode, out["last"])
+        return np.concatenate([arm, np.clip(action[:, -1:], 0.0, 1.0)], axis=1)
+
     def _advance(self, prev_ctrl: np.ndarray, ctrl: np.ndarray) -> None:
         """Run one control period, ramping the arm set-points from ``prev_ctrl`` to ``ctrl``."""
         arm = self.arm_act

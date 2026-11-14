@@ -86,6 +86,19 @@ def _filter(obs: dict, obs_mode: str) -> dict:
     raise ValueError("obs_mode must be 'vision' or 'privileged'")
 
 
+def policy_observation(env, raw: dict, obs_mode: str = "vision", mask_camera: str | None = None) -> dict:
+    """What a policy sees (the benchmark protocol): ``raw`` env observations filtered by
+    ``obs_mode``, plus ``instruction`` (object array of strings) and, with ``mask_camera``,
+    ``target_mask`` ((N, H, W) uint8, zeros when the task has no single target)."""
+    obs = _filter(raw, obs_mode)
+    obs["instruction"] = np.array(env.instructions(), dtype=object)
+    if mask_camera is not None:
+        size = env.image_size
+        masks = [env.render_target_mask(mask_camera, env_id=i) for i in range(env.num_envs)]
+        obs["target_mask"] = np.stack([m if m is not None else np.zeros(size, np.uint8) for m in masks])
+    return obs
+
+
 def evaluate(task: str, policy_factory: Callable, *, episodes: int = 50, num_envs: int = 10,
              seed: int = EVAL_SEED, obs_mode: str = "vision", cameras=("front", "wrist"),
              image_size: tuple[int, int] = (256, 256), mask_camera: str | None = None,
@@ -101,12 +114,7 @@ def evaluate(task: str, policy_factory: Callable, *, episodes: int = 50, num_env
     policy = policy_factory(env)
 
     def augment(raw: dict) -> dict:
-        obs = _filter(raw, obs_mode)
-        obs["instruction"] = np.array(env.instructions(), dtype=object)
-        if mask_camera is not None:
-            masks = [env.render_target_mask(mask_camera, env_id=i) for i in range(num_envs)]
-            obs["target_mask"] = np.stack([m if m is not None else np.zeros(image_size, np.uint8) for m in masks])
-        return obs
+        return policy_observation(env, raw, obs_mode, mask_camera)
 
     slot_episode = np.full(num_envs, -1)
     next_episode = 0

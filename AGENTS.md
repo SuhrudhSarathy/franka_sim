@@ -23,8 +23,10 @@ The benchmark measures three things:
 
 ```sh
 uv sync --extra lerobot --extra video --extra server   # all extras except warp; Python 3.12, uv-managed
-uv run --extra lerobot --extra server pytest -q        # full suite, ~100 s on CPU (85 tests + 1 warp); run before every commit
+uv run --extra lerobot --extra server pytest -q        # full suite, ~60-100 s on CPU (106 tests); run before every commit
 uv run --extra server mjpython scripts/serve.py --task hammer_nails   # proxy robot + MuJoCo viewer (macOS: mjpython)
+uv run --extra teleop mjpython scripts/dagger.py teleop --task peg_insertion --viewer \
+    --policy franka_sim.dagger.toy:biased_expert --obs-mode privileged   # try HG-DAgger
 uv run python scripts/evaluate.py --policy scripted --episodes 50   # expert must stay at 1.00 on every task
 uv run --extra video python scripts/make_videos.py --envs hammer_nails_long --episodes 2   # eyeball a change
 ```
@@ -46,6 +48,8 @@ uv run --extra video python scripts/make_videos.py --envs hammer_nails_long --ep
 | `controller.py` | action modes (`joint_pos`, `joint_vel`, `joint_delta`, `ee_pose`, `delta_ee_pose`; `ee_delta` alias) -> commanded joints: `MinkIK` (mink QP on an arm-only model), velocity limits (optional acceleration limits), anti-windup |
 | `server/` | proxy robot: `SimRobot` (one world, real-time `tick`, commands held like a driver, lockstep `step`), `RobotServer` (main-thread loop + native viewer + uvicorn thread), `web.py` (WebSocket `/ws`, `/api/state`), `protocol.py` (msgpack + numpy) |
 | `client.py` | `RobotClient`: `observe`/`act`/`stop` (real time), `pause`/`step`/`reset`/`run` (lockstep) |
+| `teleop/` | `TeleopDevice` (`poll() -> TeleopInput(twist, events, fine)`, `show(frames, hud)`); `KeyboardTeleop` = pygame console as `python -m franka_sim.teleop.keyboard` with shared-memory frames; `ScriptedDevice` for tests |
+| `dagger/` | `collect.py`: `collect_dagger` (beta-mixture, scripted expert labels, batched) and `record_step`; `session.py`: `TeleopSession` (real-time HG-DAgger / teleop demos, single env); `remote.py` + `policy_server.py`: `serve_policy` / `RemotePolicy` / `load_factory` (`scripted`, `module:factory`, `remote:ws://...`); `toy.py`: `biased_expert` |
 | `scene.py` | builds the `MjSpec`: Panda (vendored Menagerie `mjx_panda.xml`), gravity compensation, stiff gripper servo, floor, lights, critically damped arm servos, floor, lights, cameras (`scene.CAMERAS`: `front`/`side`/`left`/`top`/`back`/`angle`/`wrist`); calls `task.build(spec)` |
 | `backends/` | `cpu.py` (one `MjData` per env, thread pool) and `warp.py` (one batched Warp `Data`, CUDA graph capture). Same `Backend` interface: `read`/`write`/`reset`/`step`/`forward`/`mjdata` |
 | `ik.py` | damped-least-squares IK (used only to sample start poses on reset) and quaternion helpers |
@@ -66,6 +70,9 @@ Scripts (`scripts/`):
 - `make_videos.py`: one mp4 per expert episode.
 - `benchmark.py`: physics *speed*, not the task benchmark.
 - `serve.py`: the proxy robot (MuJoCo viewer + model API).
+- `dagger.py`: `teleop` (HG-DAgger, or plain teleop demos without `--policy`) and `auto` (scripted
+  labels). One round per run, written to `data/dagger/<task>/round_<r>.hdf5`.
+- `serve_policy.py`: serves a policy factory over WebSocket (GPU box) for `--policy remote:ws://...`.
 
 ## Rules the code relies on (do not break)
 
@@ -133,6 +140,24 @@ Scripts (`scripts/`):
 - Changing gains, interpolation or the controller changes the expert's timing. Re-run
   `evaluate.py` and re-measure `HORIZONS`.
 
+**DAgger and teleop**
+- One policy interface everywhere: `factory(env)` returns an object with `reset(env_ids, obs)`,
+  `act(obs)` (batched, in `env.action_mode`) and optionally `interrupt(env_ids, obs)` (a human
+  handed back mid-episode). The obs come from `benchmark.policy_observation`.
+- Labels go in the learner's action space through `env.executed_action(mode)` /
+  `env.convert_action(a, from, to)` (`ArmController.preview` + `express`). Executing a converted
+  action reproduces the same joint command exactly; `test_convert_action_round_trips` checks it.
+  Never record raw human `delta_ee_pose` as the label of a `joint_pos` learner.
+- The scripted expert as a labeler: `make_policy(env, any_env_mode=True)`. Call
+  `expert.track(env.last_command["ee_pose"])` before every `act`, otherwise its smoothed command
+  continues its own plan instead of correcting from where the learner left the robot.
+- Human control is `delta_ee_pose` from the *commanded* pose (bumpless takeover). The gripper is
+  taken over from `last_command["gripper"]`.
+- DAgger HDF5: `actor` (0 learner / 1 human / 2 expert), `intervention`, and `expert/{actions,
+  joint_pos, ee_pose, gripper}`, via `EpisodeBuffer.extras`. The exporter adds `dagger.*` and,
+  when all files have them, `expert.*`. DAgger seeds are `20000 + 1000 * round + k`, below
+  `EVAL_SEED`.
+
 **Experts and the benchmark**
 - Experts emit `ee_pose` actions and read **privileged** observations. Precise phases (final
   insertion) use `Target(noise=0)`: demo noise (2 mm) is larger than PCB and peg clearances.
@@ -189,6 +214,18 @@ Scripts (`scripts/`):
     runs as Python's main thread, and offscreen rendering works.
   - Closing a passive viewer finishes asynchronously, so reopening it right away (on a task
     switch) raises "another MuJoCo viewer is already open". `_open_viewer` retries.
+- **mjpython ignores SIGINT.** It starts scripts with SIGINT set to `SIG_IGN`, so Ctrl+C silently did
+  nothing. Long-running loops (`RobotServer.serve_forever`, `TeleopSession.run`) wrap themselves in
+  `_signals.interruptible()`.
+- **Teleop console process:**
+  - It is a plain `subprocess` (`python -m franka_sim.teleop.keyboard`), not `multiprocessing`.
+    `spawn` re-imports the caller's `__main__`, which crashes unguarded scripts and notebooks.
+  - Frames go through shared memory and never through a pipe: a console that stops reading must
+    not block the simulation. An earlier pipe-based version deadlocked.
+  - On Python < 3.13 the child must `resource_tracker.unregister` the attached block, or it
+    deletes the parent's shared memory when it exits.
+  - Set `FRANKA_SIM_CONSOLE_SNAPSHOT=out.png` to save one frame of the console. macOS denies
+    `screencapture` to agents.
 - **Recording:** `collect_demos` keeps the reset info and the step info separate. Mixing them once
   overwrote `cond_*`.
 
@@ -207,8 +244,12 @@ Done:
   - Expert still at 1.00 everywhere. Horizons re-measured.
 - **Cameras:** 7 in total (`front`, `side`, `left`, `top`, `back`, `angle`, `wrist`).
 - **Proxy robot:** `scripts/serve.py` with the native MuJoCo viewer and a WebSocket model API. The
-  user chose the native viewer over a web UI. There is no keyboard teleop in it (MuJoCo's default
-  viewer only), but a teleop client could drive the API.
+  user chose the native viewer over a web UI.
+- **Teleop and DAgger (2026-11-14):**
+  - Keyboard teleop console (the user has no SpaceMouse or gamepad).
+  - HG-DAgger sessions and plain teleop demos; automatic DAgger with scripted labels.
+  - Remote policies, and LeRobot export of DAgger fields.
+  - Not yet tried with a trained learner; the toy biased learner stands in for one.
 
 On hold (the user asked to wait; do not start without asking):
 - **Recording and converting the benchmark datasets.** When asked, run
@@ -228,6 +269,13 @@ Out of date on disk (gitignored):
   Rebuild them rather than mixing them with new data.
 
 Ideas not started:
+- **A LeRobot policy adapter.** A `factory(env)` that loads a LeRobot checkpoint. It maps
+  `policy_observation` to LeRobot batch keys (`observation.state` = joint_pos + gripper_width,
+  `observation.images.<cam>`, `task`), as `lerobot_export.py` writes them. `interrupt` must clear
+  the action queue. This is the missing piece for HG-DAgger with a trained ACT, diffusion or pi0
+  model.
+- **More teleop devices** (SpaceMouse via `pyspacemouse`, gamepad). Subclass `TeleopDevice`;
+  `TeleopSession` only needs `poll()` (and optionally `show`).
 - **Batched GPU rendering for evaluation.** The `mujoco_warp.render` / `create_render_context`
   ray tracer could render image observations for hundreds of worlds at once. It is untested on
   these scenes; check that its images match `mujoco.Renderer`, which produced the training data,

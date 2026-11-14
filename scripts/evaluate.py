@@ -7,15 +7,16 @@
     uv run python scripts/evaluate.py --policy my_pkg.policies:make --policy-kwargs '{"ckpt": "run1"}' \
         --tasks hammer_nails hammer_nails_long --episodes 50 --cameras front wrist --mask-camera top
 
+    # a policy served elsewhere (scripts/serve_policy.py, e.g. on a GPU box)
+    uv run --extra server python scripts/evaluate.py --policy remote:ws://gpu-box:9000
+
 Prints a table and writes every metric to --out (JSON).
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
-from functools import partial
 from pathlib import Path
 
 from franka_sim.benchmark import EVAL_SEED, SUITE, evaluate, scripted_factory
@@ -24,10 +25,12 @@ from franka_sim.benchmark import EVAL_SEED, SUITE, evaluate, scripted_factory
 def load_factory(spec: str, kwargs: dict):
     if spec == "scripted":
         return scripted_factory(**kwargs)
-    module, _, name = spec.partition(":")
-    if not name:
-        raise SystemExit("--policy must be 'scripted' or 'module.path:factory'")
-    return partial(getattr(importlib.import_module(module), name), **kwargs)
+    from franka_sim.dagger.remote import load_factory as _load
+
+    try:
+        return _load(spec, kwargs)  # "module.path:factory" or "remote:ws://host:port"
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
 
 def main():

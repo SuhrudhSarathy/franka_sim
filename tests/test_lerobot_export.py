@@ -34,3 +34,37 @@ def test_convert_to_lerobot(tmp_path):
     mask = item["observation.images.target_mask"]
     assert mask.shape == (3, 64, 64)
     assert set(mask.unique().tolist()) <= {0.0, 1.0} and mask.sum() > 0
+
+
+def test_convert_dagger_rounds(tmp_path):
+    """DAgger files export with actor / intervention / expert labels; plain demos mix in as actor 2."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    from franka_sim.dagger import collect_dagger
+    from franka_sim.dagger.toy import biased_expert
+
+    env = franka_sim.make("buttons", num_envs=2, action_mode="joint_pos", max_episode_steps=40)
+    with DemoWriter(tmp_path / "r0.hdf5", env) as w:
+        collect_dagger(env, None, 2, w, seed=0)
+    with DemoWriter(tmp_path / "r1.hdf5", env) as w:
+        collect_dagger(env, biased_expert(env), 2, w, beta=0.5, obs_mode="privileged", seed=10)
+    env.close()
+    files = [tmp_path / "r0.hdf5", tmp_path / "r1.hdf5"]
+    ds = convert(files, "local/dagger", tmp_path / "lr", cameras=(), mask_camera=None, labels="expert",
+                 only_success=False, progress=None)
+    ds = LeRobotDataset("local/dagger", root=tmp_path / "lr")
+    item = ds[3]
+    for key in ("dagger.actor", "dagger.intervention", "expert.joint_pos", "expert.ee_pose"):
+        assert key in item
+    np.testing.assert_allclose(item["action"].numpy(), item["expert.joint_pos"].numpy())
+    actors = {int(ds[i]["dagger.actor"]) for i in range(ds.num_frames)}
+    assert actors == {0, 2}
+
+    with pytest.raises(ValueError, match="expert labels"):  # plain demos have no expert labels
+        h5 = tmp_path / "plain.hdf5"
+        env = franka_sim.make("buttons", num_envs=1, action_mode="ee_pose", seed=0)
+        with DemoWriter(h5, env) as w:
+            collect_demos(env, make_policy(env), 1, w)
+        env.close()
+        convert([h5, files[0]], "local/x", tmp_path / "lr2", cameras=(), mask_camera=None, labels="expert",
+                progress=None)

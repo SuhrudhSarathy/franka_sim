@@ -34,7 +34,7 @@ import mujoco
 import numpy as np
 
 from franka_sim import robot
-from franka_sim.ik import axis_angle_to_quat, mat_to_quat, quat_mul
+from franka_sim.ik import axis_angle_to_quat, mat_to_quat, quat_conj, quat_mul, quat_to_axis_angle
 
 ACTION_DIMS = {
     "joint_pos": 8,
@@ -225,5 +225,45 @@ class ArmController:
         if mode not in ("ee_pose", "delta_ee_pose"):
             for i in range(n):
                 ee[i] = np.concatenate(self.ik.fk(q_new[i]))
+        # What ``express`` needs to restate this command in another mode.
+        self.last = {"q_before": self.q_cmd, "q_meas": np.asarray(q_meas, float).copy(), "q_new": q_new.copy(),
+                     "ee": ee.copy()}
         self.q_cmd = q_new
         return {"joint_pos": q_new.copy(), "ee_pose": ee}
+
+    def preview(self, mode: str, arm_action: np.ndarray, q_meas: np.ndarray) -> dict:
+        """``compute`` without committing: the command state is left as it was. Returns the result of
+        ``compute`` plus the bookkeeping ``express`` needs (as ``compute`` stores in ``last``)."""
+        saved = (self.q_cmd.copy(), self.v_cmd.copy(), getattr(self, "last", None))
+        try:
+            out = self.compute(mode, arm_action, q_meas)
+            out["last"] = self.last
+        finally:
+            self.q_cmd, self.v_cmd, self.last = saved
+        return out
+
+    def express(self, mode: str, last: dict | None = None) -> np.ndarray:
+        """Restate a command (by default the last committed one) as an arm action in ``mode``.
+
+        The result, executed in ``mode`` from the same state, reproduces the same joint command: e.g.
+        a human's ``delta_ee_pose`` correction becomes the ``joint_pos`` (or ``ee_pose``, ...) label a
+        policy with that action space should learn. ``(N, ACTION_DIMS[mode] - 1)``.
+        """
+        mode = canonical_mode(mode)
+        last = self.last if last is None else last
+        q_before, q_meas, q_new, ee = last["q_before"], last["q_meas"], last["q_new"], last["ee"]
+        if mode == "joint_pos":
+            return q_new.copy()
+        if mode == "joint_delta":
+            return q_new - q_meas
+        if mode == "ee_pose":
+            return ee.copy()
+        anchor = q_meas + np.clip(q_before - q_meas, -self.max_lag, self.max_lag)
+        if mode == "joint_vel":
+            return (q_new - anchor) / self.dt
+        out = np.empty((len(q_new), 6))  # delta_ee_pose, relative to the anchored commanded pose
+        for i in range(len(q_new)):
+            p0, r0 = self.ik.fk(anchor[i])
+            out[i, :3] = ee[i, :3] - p0
+            out[i, 3:] = quat_to_axis_angle(quat_mul(ee[i, 3:7], quat_conj(r0)))
+        return out

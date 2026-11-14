@@ -15,6 +15,7 @@ uv sync                     # CPU backend
 uv sync --extra warp        # + MuJoCo Warp backend
 uv sync --extra video       # + mp4 writing for the scripts
 uv sync --extra server      # + proxy-robot server and client (see "Proxy robot")
+uv sync --extra teleop      # + keyboard teleop console (see "Teleop and DAgger")
 ```
 
 **Headless servers.** MuJoCo renders through OpenGL. On Linux with no display (`DISPLAY` and
@@ -152,6 +153,98 @@ simulator state (oracle use only). `GET /api/state` returns the robot and episod
 Everything runs on one thread (MuJoCo's OpenGL needs it), and the network layer queues requests
 between control ticks. The scripted expert solves tasks through the socket in lockstep, at about
 500 steps/s headless and 260 with the viewer.
+
+## Teleop and DAgger
+
+`scripts/dagger.py` collects DAgger data. Each run is one round and writes one HDF5 file: the usual
+demo format plus, per step:
+- `actor`: 0 learner, 1 human, 2 scripted expert;
+- `intervention`: a human was in control;
+- `expert/*`: the scripted expert's label for the state, in the learner's action mode and as
+  absolute joint and end-effector targets.
+
+Train on the union of all rounds, then run the next round with the new policy.
+
+**Human-gated (HG-DAgger).** The policy drives in real time. When it goes wrong, you take over with
+the keyboard, steer, and hand back.
+
+```sh
+# macOS: --viewer (MuJoCo's window) needs mjpython. The teleop console works with plain python too.
+uv run --extra teleop --extra server mjpython scripts/dagger.py teleop --task peg_insertion --round 1 \
+    --policy my_pkg.policies:make --action-mode joint_pos --cameras front wrist --viewer
+
+# try the loop now, with a deliberately biased "learner" that misses the hole
+uv run --extra teleop mjpython scripts/dagger.py teleop --task peg_insertion --viewer \
+    --policy franka_sim.dagger.toy:biased_expert --obs-mode privileged
+
+# no policy: plain teleop demonstrations
+uv run --extra teleop python scripts/dagger.py teleop --task kitting --episodes 10
+```
+
+The teleop console is a small window showing the `back` and `wrist` cameras, who is in control, the
+instruction and the progress. Click it to drive:
+
+| keys | |
+|---|---|
+| `W`/`S`, `A`/`D`, `R`/`F` | move ±x (away from / toward the base), ±y (robot's left / right), ±z |
+| `Q`/`E`, `I`/`K`, `J`/`L` | yaw, pitch, roll |
+| `Shift` (held) | precision mode (1/4 speed) |
+| `[` / `]` | slower / faster (default 0.15 m/s) |
+| `Space` | toggle the gripper |
+| `Tab` or `Return` | take over / hand back to the policy |
+| `P` | pause |
+| `N` | end the episode and save it |
+| `Backspace` | discard the episode |
+| `Esc` or close a window | quit |
+
+How a session behaves:
+- **Taking over.** Any movement key takes control from the policy (`--no-auto-takeover`: only
+  `Tab`). The switch is bumpless: you move from the robot's *commanded* pose, and the gripper
+  starts where the policy left it.
+- **Handing back.** The policy's `interrupt(env_ids, obs)` is called if it has one (`reset`
+  otherwise), so a policy that executes action chunks drops the actions it queued before you took
+  over.
+- **Labels.** Your corrections are stored in the policy's action space (`actions`), and as
+  absolute targets (`commands/*`).
+- **Episode end.** An episode ends on success (plus 10 settling steps), on a wrong target, or at
+  the horizon. Failed episodes are kept, because their interventions are the point.
+- **Slow policies.** `--realtime-factor 0.5` runs the clock at half speed.
+
+**Automatic DAgger.** The scripted expert labels every state the learner visits. No human is
+needed, which suits sweeps and ablations:
+
+```sh
+uv run python scripts/dagger.py auto --task peg_insertion --round 0 --episodes 100        # expert demos (beta = 1)
+uv run python scripts/dagger.py auto --task peg_insertion --round 1 --episodes 100 \
+    --policy my_pkg.policies:make --beta 0.5 --action-mode joint_pos --cameras front wrist
+```
+
+- **Mixing.** Each step, the expert acts with probability `beta` (`--mixing episode`: a coin per
+  episode). Its label is recorded either way.
+- **Re-anchoring.** The expert is re-anchored to the robot's commanded pose each step, so its label
+  is a correction from where the learner left the robot.
+
+**Policies** use the benchmark interface (`factory(env)` returning an object with
+`reset(env_ids, obs)`, `act(obs)` and optionally `interrupt`), so the same policy runs in
+`evaluate.py` and in DAgger.
+- **Local:** `module.path:factory`.
+- **Remote, e.g. on a GPU box:**
+  `uv run --extra server python scripts/serve_policy.py --policy my_pkg.policies:make --host 0.0.0.0`
+  there. Then pass `--policy remote:ws://gpu-box:9000` here (`evaluate.py` accepts it too). The
+  remote factory gets an `EnvSpec` (task, action mode and dimension, cameras, image size, control
+  period) instead of the env.
+
+**Export** every round into one LeRobot dataset, so failures (which hold interventions) are kept:
+
+```sh
+uv run --extra lerobot python scripts/to_lerobot.py data/dagger/peg_insertion/round_*.hdf5 \
+    --repo-id <hf-user>/peg_dagger --root lerobot_data/peg_dagger --include-failures [--labels expert]
+```
+
+The export adds `dagger.actor` and `dagger.intervention` per frame. HG-DAgger usually trains on
+human-labelled frames, so mask the loss with them rather than cutting episodes apart. With expert
+labels in every file, `expert.joint_pos` and `expert.ee_pose` are added too, and `--labels expert`
+makes them the `action` (classic DAgger).
 
 ## Tasks
 
@@ -389,6 +482,9 @@ src/franka_sim/
   controller.py     action modes -> joint commands: mink differential IK, velocity limits, anti-windup
   server/           proxy robot: SimRobot (held commands, watchdog), RobotServer (real-time loop, viewer, WebSocket API)
   client.py         RobotClient for the proxy robot
+  teleop/           teleop devices: keyboard console (pygame, child process), scripted device for tests
+  dagger/           DAgger: collect.py (scripted-expert rounds), session.py (HG-DAgger / teleop),
+                    remote.py (policy server + RemotePolicy), toy.py (a biased learner to try it)
   ik.py             damped-least-squares IK (start-pose sampling) and quaternion helpers
   benchmark.py      benchmark suite, seeds, observation protocol, evaluation loop
   masks.py          binary target masks from segmentation rendering
@@ -398,7 +494,7 @@ src/franka_sim/
   recording.py      HDF5 demo writer / reader, batched collection loop
   dataset.py        BCDataset (observation history + action chunks)
   lerobot_export.py HDF5 demos -> LeRobot dataset
-scripts/            serve.py (proxy robot), evaluate.py (benchmark evaluation), record_demos.py, replay.py, make_videos.py,
+scripts/            serve.py (proxy robot), dagger.py (DAgger rounds, teleop), serve_policy.py, evaluate.py (benchmark evaluation), record_demos.py, replay.py, make_videos.py,
                     to_lerobot.py, build_datasets.py, benchmark.py (physics speed, not the task benchmark)
 ```
 

@@ -32,6 +32,9 @@ server = [
     "uvicorn>=0.30",
     "websockets>=13",
 ]
+teleop = [
+    "pygame-ce>=2.5",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

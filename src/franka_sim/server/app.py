@@ -20,6 +20,7 @@ import threading
 import time
 from concurrent.futures import Future
 
+from franka_sim._signals import interruptible
 from franka_sim.server import protocol
 from franka_sim.server.robot import SimRobot
 
@@ -169,6 +170,8 @@ class RobotServer:
         now = time.perf_counter()
         next_tick, next_state, next_view = now, now, now
         window_start, window_ticks = now, 0
+        sigint = interruptible()  # Ctrl+C stops the server, also under mjpython (which ignores SIGINT)
+        sigint.__enter__()
         try:
             while not self._stop.is_set():
                 now = time.perf_counter()
@@ -197,6 +200,7 @@ class RobotServer:
         except KeyboardInterrupt:
             pass
         finally:
+            sigint.__exit__(None, None, None)
             self._uvicorn.should_exit = True
             web.join(timeout=5)
             self._close_viewer()

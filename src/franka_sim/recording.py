@@ -11,6 +11,8 @@ File layout (robomimic-style)::
         commands/ee_pose          (T, 7)   ... as an end-effector pose (xyz + wxyz)
         commands/gripper          (T,)     ... gripper closure in [0, 1]
         rewards, success, dones   (T,)
+        <extra>                   (T, ...) optional per-step arrays, e.g. DAgger's ``actor``,
+                                           ``intervention`` and ``expert/<representation>`` labels
         states/<field>            (T, ...) qpos, qvel, ctrl, mocap_pos, mocap_quat (exact replay)
         cond/<key>                conditioning variables of the episode (e.g. target nail index)
 """
@@ -40,6 +42,7 @@ class EpisodeBuffer:
     instruction: str = ""
     options: dict = field(default_factory=dict)
     steps_since_success: int = -1
+    extras: dict[str, list] = field(default_factory=dict)  # per-step arrays, path -> list
 
     def __len__(self) -> int:
         return len(self.actions)
@@ -91,6 +94,9 @@ class DemoWriter:
         st = g.create_group("states")
         for k, v in ep.states.items():
             st.create_dataset(k, data=np.stack(v))
+        for k, v in ep.extras.items():
+            arr = np.stack(v)
+            g.create_dataset(k, data=arr.astype(np.float32) if arr.dtype == np.float64 else arr)
         g.create_dataset("rewards", data=np.asarray(ep.rewards, dtype=np.float32))
         g.create_dataset("success", data=np.asarray(ep.success, dtype=bool))
         dones = np.zeros(T, dtype=bool)
