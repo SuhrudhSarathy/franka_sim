@@ -190,7 +190,7 @@ frames, switched with `M` (start with `--frame world|heading`):
 
 | keys | |
 |---|---|
-| `W`/`S`, `A`/`D` | world: ±x (away from / toward the base), ±y (robot's left / right). heading: forward/back, left/right of the gripper |
+| `W`/`S`, `A`/`D` | world: ±x (away from / toward the base), −y/+y (A: robot's right, image left in the `wrist` and `front` views). heading: the same, turned with the gripper's yaw |
 | `R`/`F` | up / down (world z, in both frames) |
 | `Q`/`E` | spin the gripper about its own axis (the axis the wrist camera looks along) |
 | `I`/`K`, `J`/`L` | pitch, roll about the frame's left and forward axes |
@@ -200,8 +200,8 @@ frames, switched with `M` (start with `--frame world|heading`):
 | `Space` | toggle the gripper |
 | `Tab` or `Return` | take over / hand back to the policy |
 | `P` | pause |
-| `N` | end the episode and save it |
-| `Backspace` | discard the episode |
+| `Y` | end the episode and save it |
+| `N` or `Backspace` | end the episode and reject it |
 | `Esc` or close a window | quit |
 
 How a session behaves:
@@ -214,7 +214,9 @@ How a session behaves:
 - **Labels.** Your corrections are stored in the policy's action space (`actions`), and as
   absolute targets (`commands/*`).
 - **Episode end.** An episode ends on success (plus 10 settling steps), on a wrong target, or at
-  the horizon. Failed episodes are kept, because their interventions are the point.
+  the horizon. Failed episodes are kept, because their interventions are the point. With
+  `--confirm-end`, you decide instead: at those points the robot freezes and the console shows
+  `SAVE? Y / N`. `Y` saves the episode (failures too), `N` rejects it. Y/N also work at any time.
 - **Slow policies.** `--realtime-factor 0.5` runs the clock at half speed.
 
 **Automatic DAgger.** The scripted expert labels every state the learner visits. No human is

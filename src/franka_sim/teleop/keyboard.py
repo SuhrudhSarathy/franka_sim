@@ -40,19 +40,19 @@ from franka_sim.teleop.base import TeleopDevice, TeleopInput
 
 # key name -> (twist axis, sign)
 MOTION_KEYS = {
-    "w": (0, 1), "s": (0, -1), "a": (1, 1), "d": (1, -1), "r": (2, 1), "f": (2, -1),
+    "w": (0, 1), "s": (0, -1), "a": (1, -1), "d": (1, 1), "r": (2, 1), "f": (2, -1),
     "l": (3, 1), "j": (3, -1), "i": (4, 1), "k": (4, -1), "q": (5, 1), "e": (5, -1),
 }
 EVENT_KEYS = {
-    "space": "grip", "tab": "toggle", "return": "toggle", "p": "pause", "n": "save",
+    "space": "grip", "tab": "toggle", "return": "toggle", "p": "pause", "y": "save", "n": "discard",
     "backspace": "discard", "escape": "quit", "[": "slower", "]": "faster", "m": "frame",
 }
 # Motion legend per operator frame (``teleop.base``), then the shared line.
 MOTION_LEGEND = {
-    "world": "WORLD axes: W/S +-x  A/D +-y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: heading  Shift fine",
-    "heading": "HEADING axes: W/S fwd/back  A/D left/right  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: world",
+    "world": "WORLD axes: W/S +x/-x  A/D -y/+y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: heading  Shift fine",
+    "heading": "HEADING axes: W/S fwd/back  A/D -y/+y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: world",
 }
-LEGEND_TAIL = "Space gripper   Tab take over / hand back   P pause   N save   Backspace discard   [ ] speed   Esc quit"
+LEGEND_TAIL = "Space gripper   Tab take over / hand back   P pause   Y save   N reject   [ ] speed   Esc quit"
 
 
 def keys_to_twist(pressed: set[str]) -> np.ndarray:
@@ -123,7 +123,8 @@ def _console(shm_name: str, n: int, h: int, w: int, title: str) -> None:
     small = pygame.font.SysFont("Menlo,Monaco,Consolas,monospace", 12)
     clock = pygame.time.Clock()
     seen, surfaces = None, []
-    colors = {"HUMAN": (240, 150, 40), "LEARNER": (70, 150, 255), "PAUSED": (140, 140, 150)}
+    colors = {"HUMAN": (240, 150, 40), "LEARNER": (70, 150, 255), "PAUSED": (140, 140, 150),
+              "SAVE? Y / N": (80, 200, 120)}
     codes = {name: pygame.key.key_code(name) for name in MOTION_KEYS}
     snapshot, frame_count = os.environ.get("FRANKA_SIM_CONSOLE_SNAPSHOT"), 0
     try:

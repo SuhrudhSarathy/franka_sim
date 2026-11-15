@@ -89,6 +89,7 @@ def run_teleop(args) -> None:
                             console_cameras=args.console_cameras, console_size=tuple(args.console_size),
                             speed=args.speed, frame=args.frame, auto_takeover=not args.no_auto_takeover,
                             scripted_labels=not args.no_scripted_labels, realtime_factor=args.realtime_factor,
+                            confirm_end=args.confirm_end,
                             conditions=conditions_for(args.task), seed=args.seed, viewer=args.viewer,
                             on_episode=report)
     print(f"{'HG-DAgger' if learner else 'teleop'} on {args.task}: focus the teleop window to drive "
@@ -149,6 +150,8 @@ def main() -> None:
     t.add_argument("--speed", type=float, default=0.15, help="teleop speed at full key press (m/s)")
     t.add_argument("--frame", choices=["world", "heading"], default="world",
                    help="initial key frame: fixed world axes, or turning with the gripper's yaw (M switches)")
+    t.add_argument("--confirm-end", action="store_true",
+                   help="episodes end only on Y (save) or N (reject); at success / time limit the robot waits")
     t.add_argument("--realtime-factor", type=float, default=1.0, help="<1 slows the clock (slow policies)")
     t.add_argument("--no-auto-takeover", action="store_true", help="only Tab takes control")
     t.add_argument("--no-scripted-labels", action="store_true", help="do not record scripted expert labels")

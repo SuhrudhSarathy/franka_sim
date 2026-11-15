@@ -58,6 +58,9 @@ class TeleopSession:
         realtime_factor: wall-clock pace (0.5 = half speed, for slow learners; 0 = as fast as possible).
         post_success_steps: keep recording this long after success before ending the episode.
         keep_failures: save episodes that end without success (they hold interventions too).
+        confirm_end: gate the end of every episode on the operator: instead of ending on its own
+            (success, wrong target, time limit) the episode freezes until the operator saves it
+            (``save``, key Y) or rejects it (``discard``, key N); Y saves failures too.
         conditions: reset options per episode, e.g. ``lambda k: {"target": k % 4}``.
         seed: episode ``k`` is reset with ``seed + k`` (keep below ``EVAL_SEED``).
         viewer: also open MuJoCo's native viewer on the env (CPU backend; macOS: ``mjpython``).
@@ -68,7 +71,7 @@ class TeleopSession:
                  mask_camera: str | None = None, console_cameras=("back", "wrist"),
                  console_size: tuple[int, int] = (300, 400), speed: float = 0.15, rot_speed: float = 1.0,
                  frame: str = "world", auto_takeover: bool = True, scripted_labels: bool = True, realtime_factor: float = 1.0,
-                 post_success_steps: int = 10, keep_failures: bool = True,
+                 post_success_steps: int = 10, keep_failures: bool = True, confirm_end: bool = False,
                  conditions: Callable[[int], dict] | list[dict] | None = None, seed: int = 0,
                  viewer: bool = False, on_episode: Callable | None = None):
         if env.num_envs != 1:
@@ -84,6 +87,7 @@ class TeleopSession:
         self.realtime_factor = realtime_factor
         self.post_success_steps = post_success_steps
         self.keep_failures = keep_failures
+        self.confirm_end = confirm_end
         self.conditions = conditions
         self.seed = seed
         self.on_episode = on_episode
@@ -121,6 +125,7 @@ class TeleopSession:
         self.grip = 0.0
         self.interventions = 0
         self.ep_wrong = False
+        self.awaiting = False  # confirm_end: the episode is over, waiting for the operator's Y / N
         self.raw = raw
         if self.expert is not None:
             self.expert.reset([0], raw)
@@ -144,7 +149,7 @@ class TeleopSession:
     def _end_episode(self, save: bool) -> None:
         ep = self.ep
         ok = ep.steps_since_success >= 0 and not self.ep_wrong
-        saved = save and len(ep) > 0 and (ok or self.keep_failures)
+        saved = save and len(ep) > 0 and (ok or self.keep_failures or self.confirm_end)
         if saved and self.writer is not None:
             self.writer.write(ep, ok)
         if saved:
@@ -173,7 +178,7 @@ class TeleopSession:
         frames = [env.render(cam, height=h, width=w) for cam in self.console_cameras]
         ep, n = self.ep, env.task.num_steps
         info = self._last_info
-        mode = "PAUSED" if paused else self.control
+        mode = "PAUSED" if paused else "SAVE? Y / N" if self.awaiting else self.control
         status = (f"episode {self.episodes_started}  step {len(ep)}/{env.max_episode_steps}  "
                   f"progress {int(info.get('progress', 0))}/{n}  "
                   f"{'SUCCESS' if ep.steps_since_success >= 0 else ''}{'WRONG TARGET' if self.ep_wrong else ''}")
@@ -239,8 +244,8 @@ class TeleopSession:
                         break
                     self._start_episode()
                     continue
-                if paused:
-                    self._show(paused=True)
+                if paused or self.awaiting:
+                    self._show(paused=paused)
                     time.sleep(0.03)
                     continue
                 if self.control == LEARNER and inp.moving and self.auto_takeover:
@@ -250,7 +255,9 @@ class TeleopSession:
                 ep = self.ep
                 done = (ep.steps_since_success >= self.post_success_steps or self.ep_wrong
                         or len(ep) >= env.max_episode_steps)
-                if done:
+                if done and self.confirm_end:
+                    self.awaiting = True  # frozen until the operator presses Y or N
+                elif done:
                     self._end_episode(save=True)
                     if self.saved >= num_episodes:
                         break

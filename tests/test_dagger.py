@@ -60,7 +60,7 @@ def test_learner_states_get_corrective_labels(tmp_path):
 
 
 def test_keys_to_twist():
-    np.testing.assert_array_equal(keys_to_twist({"w", "a", "q"}), [1, 1, 0, 0, 0, 1])
+    np.testing.assert_array_equal(keys_to_twist({"w", "a", "q"}), [1, -1, 0, 0, 0, 1])
     np.testing.assert_array_equal(keys_to_twist({"w", "s"}), np.zeros(6))  # opposite keys cancel
     np.testing.assert_array_equal(keys_to_twist({"f", "unrelated"}), [0, 0, -1, 0, 0, 0])
 
@@ -194,4 +194,20 @@ def test_frame_event_switches_the_teleop_frame(tmp_path):
     assert session.frame == "world"
     session.run(1)
     assert session.frame == "heading"
+    env.close()
+
+
+@pytest.mark.parametrize("answer", ["save", "discard"])
+def test_confirm_end_waits_for_the_operator(tmp_path, answer):
+    env = franka_sim.make("reach", action_mode="ee_pose", max_episode_steps=5)
+    # 5 steps reach the time limit; the session then waits (idle polls do nothing) until Y / N
+    device = ScriptedDevice([TeleopInput()] * 20 + [TeleopInput(events=[answer]), TeleopInput(events=["quit"])])
+    with DemoWriter(tmp_path / "t.hdf5", env) as w:
+        session = TeleopSession(env, device, None, w, realtime_factor=0, console_size=(48, 64),
+                                confirm_end=True, keep_failures=False)
+        summary = session.run(1)
+    assert summary["episodes"] == (1 if answer == "save" else 2)
+    assert summary["saved"] == (answer == "save") and summary["discarded"] == (answer == "discard")
+    if answer == "save":  # Y keeps a failed episode, and nothing was recorded while waiting
+        assert len(load_episode(tmp_path / "t.hdf5", 0)["actions"]) == 5
     env.close()
