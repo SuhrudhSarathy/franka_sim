@@ -60,7 +60,7 @@ def test_learner_states_get_corrective_labels(tmp_path):
 
 
 def test_keys_to_twist():
-    np.testing.assert_array_equal(keys_to_twist({"w", "a", "q"}), [1, -1, 0, 0, 0, 1])
+    np.testing.assert_array_equal(keys_to_twist({"w", "a", "q"}), [1, 1, 0, 0, 0, 1])
     np.testing.assert_array_equal(keys_to_twist({"w", "s"}), np.zeros(6))  # opposite keys cancel
     np.testing.assert_array_equal(keys_to_twist({"f", "unrelated"}), [0, 0, -1, 0, 0, 0])
 

@@ -40,7 +40,7 @@ from franka_sim.teleop.base import TeleopDevice, TeleopInput
 
 # key name -> (twist axis, sign)
 MOTION_KEYS = {
-    "w": (0, 1), "s": (0, -1), "a": (1, -1), "d": (1, 1), "r": (2, 1), "f": (2, -1),
+    "w": (0, 1), "s": (0, -1), "a": (1, 1), "d": (1, -1), "r": (2, 1), "f": (2, -1),
     "l": (3, 1), "j": (3, -1), "i": (4, 1), "k": (4, -1), "q": (5, 1), "e": (5, -1),
 }
 EVENT_KEYS = {
@@ -49,8 +49,8 @@ EVENT_KEYS = {
 }
 # Motion legend per operator frame (``teleop.base``), then the shared line.
 MOTION_LEGEND = {
-    "world": "WORLD axes: W/S +x/-x  A/D -y/+y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: heading  Shift fine",
-    "heading": "HEADING axes: W/S fwd/back  A/D -y/+y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: world",
+    "world": "WORLD axes: W/S +x/-x  A/D +y/-y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: heading  Shift fine",
+    "heading": "HEADING axes: W/S fwd/back  A/D left/right  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: world",
 }
 LEGEND_TAIL = "Space gripper   Tab take over / hand back   P pause   Y save   N reject   [ ] speed   Esc quit"
 

@@ -89,7 +89,7 @@ After every step, `env.last_command` holds the command in each representation (`
 | `top` | bird's eye |
 | `back` | over the robot's right shoulder, as a teleoperator standing behind it would see |
 | `angle` | three-quarter view from the front left, close on the workspace |
-| `wrist` | on the hand, looking along the gripper |
+| `wrist` | on the hand, looking along the gripper; oriented like `back` (away from the base is image up, the robot's left is image left) |
 
 `franka_sim.scene.CAMERAS` lists them. Pass any subset as `cameras=(...)`.
 
@@ -190,7 +190,7 @@ frames, switched with `M` (start with `--frame world|heading`):
 
 | keys | |
 |---|---|
-| `W`/`S`, `A`/`D` | world: ±x (away from / toward the base), −y/+y (A: robot's right, image left in the `wrist` and `front` views). heading: the same, turned with the gripper's yaw |
+| `W`/`S`, `A`/`D` | world: ±x (away from / toward the base), +y/−y (robot's left / right: image left / right in the `back` and `wrist` views). heading: the same, turned with the gripper's yaw |
 | `R`/`F` | up / down (world z, in both frames) |
 | `Q`/`E` | spin the gripper about its own axis (the axis the wrist camera looks along) |
 | `I`/`K`, `J`/`L` | pitch, roll about the frame's left and forward axes |

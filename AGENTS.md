@@ -162,8 +162,8 @@ Scripts (`scripts/`):
   default) or `heading` (z up, x/y turned by the gripper's yaw); `M` (the `frame` event) switches.
   In both, Q/E (`wz`) spins about the gripper's approach axis. The user rejected a wrist-camera frame
   (the axes were the model's, not intuitive); keep translations world-aligned.
-- A/D are −y/+y (A = robot's right), because the user drives from the `wrist`/`front` views, where
-  +y appears on the image right (in `back` it is on the left). Y saves and N rejects an episode;
+- The `wrist` camera's image up is the hand's +x, so it matches the `back` view (+x up, +y left)
+  and A/D = +y/−y read the same in both. Y saves and N rejects an episode;
   `--confirm-end` (`TeleopSession(confirm_end=True)`) freezes the episode at its natural end until
   Y/N.
 - DAgger HDF5: `actor` (0 learner / 1 human / 2 expert), `intervention`, and `expert/{actions,

@@ -106,10 +106,12 @@ def build_spec(task: Task | None = None, *, image_size: tuple[int, int] = (480, 
     for name, (pos, target) in FIXED_CAMERAS.items():
         up = (1.0, 0.0, 0.0) if name == "top" else (0.0, 0.0, 1.0)
         world.add_camera(name=name, pos=list(pos), quat=_look_at_quat(pos, target, up), fovy=50)
-    # Wrist camera: mounted on the hand, looking along the gripper axis (+z of the hand frame).
+    # Wrist camera: mounted on the hand, looking along the gripper axis (+z of the hand frame). Its
+    # image up is the hand's +x, so with the gripper pointing down it matches the ``back`` view: the
+    # world's +x (away from the base) is image up and the robot's left (+y) is image left.
     wrist_pos = [-0.075, 0.0, 0.045]
     spec.body("hand").add_camera(name="wrist", pos=wrist_pos,
-                                 quat=_look_at_quat(wrist_pos, [0.0, 0.0, 0.16], up=(-1.0, 0.0, 0.0)), fovy=80)
+                                 quat=_look_at_quat(wrist_pos, [0.0, 0.0, 0.16], up=(1.0, 0.0, 0.0)), fovy=80)
 
     if task is not None:
         task.build(spec)
