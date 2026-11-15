@@ -178,3 +178,20 @@ def test_all_cameras_render():
     with pytest.raises(ValueError, match="unknown cameras"):
         franka_sim.make("reach", cameras=("nope",))
     env.close()
+
+
+def test_delta_ee_pose_rotation_pivots_on_the_gripper_tip_without_drift():
+    # Rotations rotate about the ``gripper`` site; steps build on the requested pose, so IK residuals
+    # do not accumulate into translation (they used to drift ~4 mm over a 90 degree turn).
+    env = franka_sim.make("peg_insertion", num_envs=1, action_mode="delta_ee_pose")
+    for rotvec in ([0, 0, 1.0], [0, 1.0, 0], [1.0, 0, 0]):
+        env.reset(seed=1)
+        p_start = env.last_command["ee_pose"][0, :3].copy()
+        for _ in range(30):
+            a = np.zeros((1, 7))
+            a[0, 3:6] = np.array(rotvec) * env.control_dt
+            env.step(a)
+        np.testing.assert_allclose(env.last_command["ee_pose"][0, :3], p_start, atol=1e-6)
+        p_cmd, _ = env.controller.commanded_pose(0)
+        assert np.linalg.norm(p_cmd - p_start) < 2e-3  # the joint command follows within IK accuracy
+    env.close()

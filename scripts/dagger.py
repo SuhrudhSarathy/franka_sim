@@ -87,7 +87,7 @@ def run_teleop(args) -> None:
 
     session = TeleopSession(env, device, learner, writer, obs_mode=args.obs_mode, mask_camera=args.mask_camera,
                             console_cameras=args.console_cameras, console_size=tuple(args.console_size),
-                            speed=args.speed, auto_takeover=not args.no_auto_takeover,
+                            speed=args.speed, frame=args.frame, auto_takeover=not args.no_auto_takeover,
                             scripted_labels=not args.no_scripted_labels, realtime_factor=args.realtime_factor,
                             conditions=conditions_for(args.task), seed=args.seed, viewer=args.viewer,
                             on_episode=report)
@@ -147,6 +147,8 @@ def main() -> None:
     t.add_argument("--console-cameras", nargs="*", default=["back", "wrist"])
     t.add_argument("--console-size", nargs=2, type=int, default=[300, 400])
     t.add_argument("--speed", type=float, default=0.15, help="teleop speed at full key press (m/s)")
+    t.add_argument("--frame", choices=["wrist", "world"], default="wrist",
+                   help="key directions: relative to the wrist camera / gripper (default) or the world")
     t.add_argument("--realtime-factor", type=float, default=1.0, help="<1 slows the clock (slow policies)")
     t.add_argument("--no-auto-takeover", action="store_true", help="only Tab takes control")
     t.add_argument("--no-scripted-labels", action="store_true", help="do not record scripted expert labels")

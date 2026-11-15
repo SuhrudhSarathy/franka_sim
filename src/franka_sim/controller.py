@@ -23,7 +23,9 @@ mode               dim  arm part
 The Cartesian modes are solved by ``MinkIK``: differential IK posed as quadratic programs with
 mink (end-effector task + posture regularization, joint limits as hard constraints); the command then
 moves toward the IK solution within the velocity and acceleration limits. Incremental modes (``joint_vel``, ``delta_ee_pose``) build on the previous command,
-not on the measured state, so the arm does not drift under tracking lag; if contact holds the arm
+not on the measured state (``delta_ee_pose``: on the previously *requested* pose of the ``gripper``
+site, so IK residuals do not accumulate into drift, as long as it is within ``REF_POS_TOL`` /
+``REF_ROT_TOL`` of the commanded joints' pose; otherwise on that pose), so the arm does not drift under tracking lag; if contact holds the arm
 back by more than ``max_lag`` the reference is pulled back toward the measured state, so it never
 winds up.
 """
@@ -45,6 +47,13 @@ ACTION_DIMS = {
 }
 # Older names, still accepted.
 ACTION_ALIASES = {"ee_delta": "delta_ee_pose"}
+
+
+# ``delta_ee_pose`` builds on the previously requested pose while it stays this close to the forward
+# kinematics of the (anchored) joint command; further away (unreachable targets, anti-windup) it
+# builds on the joint command's pose instead.
+REF_POS_TOL = 0.01  # m
+REF_ROT_TOL = 0.1  # rad
 
 
 def canonical_mode(mode: str) -> str:
@@ -156,10 +165,12 @@ class ArmController:
         self.ik = MinkIK(**(ik_kwargs or {}))
         self.q_cmd = np.tile(robot.HOME_QPOS, (num_envs, 1))
         self.v_cmd = np.zeros((num_envs, 7))  # velocity of the command over the last period
+        self.ee_ref = np.full((num_envs, 7), np.nan)  # last requested end-effector pose (NaN: none)
 
     def reset(self, env_ids: np.ndarray, q: np.ndarray) -> None:
         self.q_cmd[env_ids] = q
         self.v_cmd[env_ids] = 0.0
+        self.ee_ref[env_ids] = np.nan
 
     def _limit_motion(self, prev: np.ndarray, target: np.ndarray) -> np.ndarray:
         """Step from ``prev`` toward ``target`` within the velocity and acceleration limits.
@@ -184,6 +195,15 @@ class ArmController:
     def _anchor(self, q_meas: np.ndarray) -> np.ndarray:
         """The previous command, pulled to within ``max_lag`` of the measured joints."""
         return q_meas + np.clip(self.q_cmd - q_meas, -self.max_lag, self.max_lag)
+
+    def _delta_origin(self, anchor: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Pose (pos, quat) a ``delta_ee_pose`` step is applied to, for one env: the previously
+        requested pose ``ref`` if it is close to the pose of the anchored joints, else that pose."""
+        p0, q0 = self.ik.fk(anchor)
+        if np.isfinite(ref).all() and np.linalg.norm(ref[:3] - p0) < REF_POS_TOL \
+                and np.linalg.norm(quat_to_axis_angle(quat_mul(ref[3:7], quat_conj(q0)))) < REF_ROT_TOL:
+            return ref[:3].copy(), ref[3:7].copy()
+        return p0, q0
 
     def compute(self, mode: str, arm_action: np.ndarray, q_meas: np.ndarray, ee_meas_quat=None) -> dict:
         """New commanded joints for ``arm_action`` ``(N, dim - 1)``; updates ``q_cmd``.
@@ -211,7 +231,7 @@ class ArmController:
                 prev = self._anchor(q_meas)
                 pos, quat = np.empty((n, 3)), np.empty((n, 4))
                 for i in range(n):
-                    p0, q0 = self.ik.fk(prev[i])
+                    p0, q0 = self._delta_origin(prev[i], self.ee_ref[i])
                     pos[i] = p0 + arm_action[i, :3]
                     quat[i] = quat_mul(axis_angle_to_quat(arm_action[i, 3:6]), q0)
             target = np.stack([self.ik.solve(prev[i], pos[i], quat[i]) for i in range(n)])
@@ -227,19 +247,20 @@ class ArmController:
                 ee[i] = np.concatenate(self.ik.fk(q_new[i]))
         # What ``express`` needs to restate this command in another mode.
         self.last = {"q_before": self.q_cmd, "q_meas": np.asarray(q_meas, float).copy(), "q_new": q_new.copy(),
-                     "ee": ee.copy()}
+                     "ee": ee.copy(), "ref_before": self.ee_ref.copy()}
         self.q_cmd = q_new
+        self.ee_ref = ee.copy()
         return {"joint_pos": q_new.copy(), "ee_pose": ee}
 
     def preview(self, mode: str, arm_action: np.ndarray, q_meas: np.ndarray) -> dict:
         """``compute`` without committing: the command state is left as it was. Returns the result of
         ``compute`` plus the bookkeeping ``express`` needs (as ``compute`` stores in ``last``)."""
-        saved = (self.q_cmd.copy(), self.v_cmd.copy(), getattr(self, "last", None))
+        saved = (self.q_cmd.copy(), self.v_cmd.copy(), self.ee_ref.copy(), getattr(self, "last", None))
         try:
             out = self.compute(mode, arm_action, q_meas)
             out["last"] = self.last
         finally:
-            self.q_cmd, self.v_cmd, self.last = saved
+            self.q_cmd, self.v_cmd, self.ee_ref, self.last = saved
         return out
 
     def express(self, mode: str, last: dict | None = None) -> np.ndarray:
@@ -261,9 +282,9 @@ class ArmController:
         anchor = q_meas + np.clip(q_before - q_meas, -self.max_lag, self.max_lag)
         if mode == "joint_vel":
             return (q_new - anchor) / self.dt
-        out = np.empty((len(q_new), 6))  # delta_ee_pose, relative to the anchored commanded pose
+        out = np.empty((len(q_new), 6))  # delta_ee_pose, relative to the pose compute() built on
         for i in range(len(q_new)):
-            p0, r0 = self.ik.fk(anchor[i])
+            p0, r0 = self._delta_origin(anchor[i], last["ref_before"][i])
             out[i, :3] = ee[i, :3] - p0
             out[i, 3:] = quat_to_axis_angle(quat_mul(ee[i, 3:7], quat_conj(r0)))
         return out

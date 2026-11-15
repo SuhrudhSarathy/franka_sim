@@ -47,8 +47,12 @@ EVENT_KEYS = {
     "space": "grip", "tab": "toggle", "return": "toggle", "p": "pause", "n": "save",
     "backspace": "discard", "escape": "quit", "[": "slower", "]": "faster",
 }
-LEGEND = ("WASD move   R/F up/down   Q/E yaw   I/K pitch   J/L roll   Shift fine   Space gripper",
-          "Tab take over / hand back   P pause   N save   Backspace discard   [ ] speed   Esc quit")
+# Motion legend per operator frame (``teleop.base``), then the shared line.
+MOTION_LEGEND = {
+    "wrist": "Wrist view: W/S in/out  A/D left/right  R/F up/down  Q/E spin  I/K tilt  J/L turn  Shift fine",
+    "world": "World: W/S fwd/back  A/D left/right  R/F up/down  Q/E yaw  I/K pitch  J/L roll  Shift fine",
+}
+LEGEND_TAIL = "Space gripper   Tab take over / hand back   P pause   N save   Backspace discard   [ ] speed   Esc quit"
 
 
 def keys_to_twist(pressed: set[str]) -> np.ndarray:
@@ -157,7 +161,8 @@ def _console(shm_name: str, n: int, h: int, w: int, title: str) -> None:
             for line in (hud.get("instruction", ""), hud.get("detail", "")):
                 screen.blit(font.render(line, True, (200, 205, 215)), (12, y))
                 y += 22
-            for k, part in enumerate(LEGEND):
+            legend = (MOTION_LEGEND.get(hud.get("frame", "wrist"), MOTION_LEGEND["wrist"]), LEGEND_TAIL)
+            for k, part in enumerate(legend):
                 screen.blit(small.render(part, True, (130, 135, 150)), (12, h + panel_h - 36 + 17 * k))
             if not focused:
                 warn = small.render("click this window to drive the robot", True, (240, 150, 40))

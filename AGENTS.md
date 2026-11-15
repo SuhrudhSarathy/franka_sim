@@ -133,6 +133,11 @@ Scripts (`scripts/`):
   `(kv + damping) / kp * v` (`velocity_feedforward`), which removes servo lag.
 - Without the feedforward, each joint lags by its own time constant. The hand then drifts off its
   path by 6-8 mm, which broke gear grasps.
+- `delta_ee_pose` is applied at the `gripper` site (TCP between the finger pads): position adds,
+  and the rotation vector (world frame) rotates about the tip. It builds on the previously
+  *requested* pose (`ArmController.ee_ref`) while that is within 1 cm / 0.1 rad of the joint
+  command's pose. Building on `fk(q_cmd)` let IK residuals of about 0.2 mm per step pile up into
+  a few mm of drift on long rotations.
 - Acceleration limiting is off by default. It made the insertion experts' closed-loop yaw control
   oscillate (peg 0.04, PCB 0.08 success).
 - `MinkIK` solves to convergence with *no* velocity limit. `ArmController` applies the limits.
@@ -153,6 +158,11 @@ Scripts (`scripts/`):
   continues its own plan instead of correcting from where the learner left the robot.
 - Human control is `delta_ee_pose` from the *commanded* pose (bumpless takeover). The gripper is
   taken over from `last_command["gripper"]`.
+- Teleop twists are in an operator frame (`teleop.base.twist_to_world`). The default `wrist` frame
+  is the commanded gripper frame snapped to the wrist camera: forward = approach axis (site +z),
+  left = site +y (image left), up = site -x. The camera itself is tilted about 33°, so we don't use
+  its raw axes. `test_wrist_frame_matches_the_wrist_camera` checks this against the camera; re-check
+  it if you move the wrist camera.
 - DAgger HDF5: `actor` (0 learner / 1 human / 2 expert), `intervention`, and `expert/{actions,
   joint_pos, ee_pose, gripper}`, via `EpisodeBuffer.extras`. The exporter adds `dagger.*` and,
   when all files have them, `expert.*`. DAgger seeds are `20000 + 1000 * round + k`, below

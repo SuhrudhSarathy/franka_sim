@@ -33,7 +33,7 @@ from franka_sim.dagger.collect import (
     record_step,
 )
 from franka_sim.recording import STATE_FIELDS, EpisodeBuffer
-from franka_sim.teleop.base import TeleopDevice
+from franka_sim.teleop.base import TELEOP_FRAMES, TeleopDevice, twist_to_world
 
 LEARNER, HUMAN = "LEARNER", "HUMAN"
 
@@ -51,6 +51,8 @@ class TeleopSession:
         console_cameras: cameras streamed to the device's console.
         console_size: ``(height, width)`` of those frames.
         speed: operator translation speed at full deflection (m/s); ``rot_speed`` in rad/s.
+        frame: operator frame of the device's twist, ``"wrist"`` (follows the gripper, as seen in the
+            wrist camera) or ``"world"`` (see ``teleop.base``).
         auto_takeover: any motion input while the learner drives takes control immediately.
         scripted_labels: also record the scripted expert's labels (if the task has one).
         realtime_factor: wall-clock pace (0.5 = half speed, for slow learners; 0 = as fast as possible).
@@ -65,7 +67,7 @@ class TeleopSession:
     def __init__(self, env, device: TeleopDevice, learner=None, writer=None, *, obs_mode: str = "vision",
                  mask_camera: str | None = None, console_cameras=("back", "wrist"),
                  console_size: tuple[int, int] = (300, 400), speed: float = 0.15, rot_speed: float = 1.0,
-                 auto_takeover: bool = True, scripted_labels: bool = True, realtime_factor: float = 1.0,
+                 frame: str = "wrist", auto_takeover: bool = True, scripted_labels: bool = True, realtime_factor: float = 1.0,
                  post_success_steps: int = 10, keep_failures: bool = True,
                  conditions: Callable[[int], dict] | list[dict] | None = None, seed: int = 0,
                  viewer: bool = False, on_episode: Callable | None = None):
@@ -75,6 +77,9 @@ class TeleopSession:
         self.obs_mode, self.mask_camera = obs_mode, mask_camera
         self.console_cameras, self.console_size = tuple(console_cameras), tuple(console_size)
         self.speed, self.rot_speed, self.speed_scale = speed, rot_speed, 1.0
+        if frame not in TELEOP_FRAMES:
+            raise ValueError(f"unknown teleop frame {frame!r}; expected one of {TELEOP_FRAMES}")
+        self.frame = frame
         self.auto_takeover = auto_takeover
         self.realtime_factor = realtime_factor
         self.post_success_steps = post_success_steps
@@ -154,7 +159,8 @@ class TeleopSession:
     def _human_action(self, inp) -> np.ndarray:
         scale = self.speed_scale * (0.25 if inp.fine else 1.0)
         dt = self.env.control_dt
-        twist = np.asarray(inp.twist, dtype=float)
+        # the frame follows the commanded pose, which the delta is applied to (not the lagging measured one)
+        twist = twist_to_world(inp.twist, self.frame, self.env.last_command["ee_pose"][0, 3:7])
         a = np.zeros(7)
         a[:3] = twist[:3] * self.speed * scale * dt
         a[3:6] = twist[3:] * self.rot_speed * scale * dt
@@ -176,7 +182,8 @@ class TeleopSession:
                   f"gripper {'closed' if self.grip > 0.5 else 'open'}"
                   + (f"  learner {self.learner_ms:.0f} ms" if self.learner is not None else ""))
         self.device.show(frames, {"mode": mode, "status": status, "instruction": ep.instruction,
-                                  "detail": detail, "cameras": list(self.console_cameras)})
+                                  "detail": detail, "cameras": list(self.console_cameras),
+                                  "frame": self.frame})
 
     def _sync_viewer(self) -> bool:
         if self._viewer is None:
