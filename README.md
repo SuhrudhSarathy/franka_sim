@@ -401,8 +401,11 @@ uv run --extra lerobot python scripts/to_lerobot.py --push --repo-id <hf-user>/f
 | `observation.environment_state` | task-specific | privileged object state; names in `meta/info.json` |
 | `observation.images.{front,wrist}` | 256×256×3 video | re-rendered from the recorded simulator states |
 | `observation.images.target_mask` | 256×256×3 PNG | binary mask (0/255) of the target entity from the top camera; single-target tasks only |
-| `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper) |
-| `action.joint_pos`, `action.ee_pose` | 8 | both action representations |
+| `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper); with `--labels expert`, the scripted expert's labels |
+| `action.joint_pos`, `action.ee_pose` | 8 | both representations of what was executed |
+| `dagger.actor` | 1 | DAgger files only: who acted, 0 learner / 1 human / 2 scripted expert (plain demos in the same dataset count as 2) |
+| `dagger.intervention` | 1 | DAgger files only: a human was in control (mask the loss with it for HG-DAgger) |
+| `expert.joint_pos`, `expert.ee_pose` | 8 | the scripted expert's labels, when every file has them (`dagger.py auto`, or `teleop` without `--no-scripted-labels`) |
 | `cond.*` | | episode conditioning: `cond.target` (single variants: nail / button / peg / gear / part / connector index) or `cond.order` (long variants: the order the expert followed) |
 | `next.reward`, `next.success`, `next.done` | 1 | |
 | `task` | string | language instruction, e.g. "pick up the hammer and hit the leftmost nail" |
