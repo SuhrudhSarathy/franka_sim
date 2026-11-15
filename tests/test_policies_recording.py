@@ -98,3 +98,34 @@ def test_bc_dataset_windows(tmp_path):
     assert last["action_pad_mask"].sum() == 1
     assert ds.stats()["actions"]["mean"].shape == (8,)
     assert ds.instruction(0).startswith("press the")
+
+
+@pytest.mark.parametrize("task", ["hammer_nails", "gear_assembly"])
+def test_recorded_delta_ee_pose_replays_the_demo(tmp_path, task):
+    """``commands/delta_ee_pose``, executed open loop in a ``delta_ee_pose`` env from the same reset,
+    reproduces the expert's joint commands and succeeds: a delta policy can learn the demos as is."""
+    path = tmp_path / "demo.hdf5"
+    env = franka_sim.make(task, action_mode="ee_pose", seed=5)
+    with DemoWriter(path, env) as w:
+        collect_demos(env, make_policy(env, noise=0.002, seed=5), 1, w, seed=5)
+    env.close()
+    ep = load_episode(path, 0)
+    cmd = ep["commands"]
+    T = len(ep["actions"])
+    assert cmd["delta_ee_pose"].shape == (T, 6)
+
+    env = franka_sim.make(task, action_mode="delta_ee_pose", seed=5)
+    env.reset(options={k: np.asarray(v).tolist() for k, v in ep["cond"].items()})  # same target / order
+    for f in ("qpos", "qvel", "ctrl", "mocap_pos", "mocap_quat"):  # and the recorded initial layout
+        env.sim.write(f, ep["states"][f][:1])
+    env.sim.forward()
+    env.ctrl[:] = ep["states"]["ctrl"][:1]
+    env.controller.reset([0], ep["states"]["qpos"][:1, env.arm_qadr])
+    success = False
+    for t in range(T):
+        a = np.concatenate([cmd["delta_ee_pose"][t], cmd["gripper"][t:t + 1]])[None].astype(np.float64)
+        _, _, _, _, info = env.step(a)
+        np.testing.assert_allclose(env.last_command["joint_pos"][0], cmd["joint_pos"][t], atol=2e-4)
+        success |= bool(info["success"][0])
+    assert success
+    env.close()

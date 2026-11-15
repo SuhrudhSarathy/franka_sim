@@ -247,6 +247,11 @@ Scripts (`scripts/`):
   files), bars refresh once a minute.
 - **Recording:** `collect_demos` keeps the reset info and the step info separate. Mixing them once
   overwrote `cond_*`.
+- **Action labels:** experts run in `ee_pose`, but every step's command is stored in all three
+  representations (`commands/{joint_pos,ee_pose,delta_ee_pose}`; `env.last_command` has the same
+  keys). Pick the policy's action space at export (`--action`), not by changing the expert.
+  `test_recorded_delta_ee_pose_replays_the_demo` checks that the deltas replay the demo exactly.
+  Recordings made before 2026-11-15 lack `delta_ee_pose`; the exporter drops the column for them.
 
 ## Project status (2026-11-14)
 

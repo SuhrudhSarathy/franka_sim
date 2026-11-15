@@ -27,7 +27,7 @@ DATASETS = {name: (name, {}, n or None) for name, (_kind, n) in SUITE.items()}
 
 
 def build(name: str, episodes: int, namespace: str, cameras: list[str], image_size: tuple[int, int],
-          num_envs: int, seed: int, overwrite: bool, hdf5_dir: str = "data",
+          num_envs: int, seed: int, overwrite: bool, action: str = "joint_pos", hdf5_dir: str = "data",
           lerobot_dir: str = "lerobot_data", slots=None) -> dict:
     import shutil
 
@@ -41,14 +41,14 @@ def build(name: str, episodes: int, namespace: str, cameras: list[str], image_si
     slot = slots.get() if slots is not None else 0  # a terminal line for this job's progress bars
     try:
         return _build(name, task, task_kwargs, balanced, h5, root, episodes, namespace, cameras, image_size,
-                      num_envs, seed, slot)
+                      num_envs, seed, slot, action)
     finally:
         if slots is not None:
             slots.put(slot)
 
 
 def _build(name, task, task_kwargs, balanced, h5, root, episodes, namespace, cameras, image_size, num_envs,
-           seed, slot) -> dict:
+           seed, slot, action="joint_pos") -> dict:
     import franka_sim
     from franka_sim.lerobot_export import convert
     from franka_sim.policies import make_policy
@@ -64,7 +64,7 @@ def _build(name, task, task_kwargs, balanced, h5, root, episodes, namespace, cam
     env.close()
     t1 = time.time()
     ds = convert([h5], f"{namespace}/franka_sim_{name}", root, cameras=cameras, image_size=image_size,
-                 progress=None, bar={"desc": f"{name}: convert", "position": slot, "leave": False})
+                 action=action, progress=None, bar={"desc": f"{name}: convert", "position": slot, "leave": False})
     return {"name": name, "episodes": ds.num_episodes, "frames": ds.num_frames,
             "scripted_success": f"{stats.succeeded}/{stats.attempted}",
             "record_s": round(t1 - t0), "convert_s": round(time.time() - t1), "root": str(root)}
@@ -81,6 +81,8 @@ def main():
     p.add_argument("--jobs", type=int, default=3, help="datasets built in parallel")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--action", default="joint_pos", choices=["joint_pos", "ee_pose", "delta_ee_pose"],
+                   help="representation stored as `action` (all three are always in action.*)")
     p.add_argument("--hdf5-dir", default="data", help="where the recorded HDF5 demos go")
     p.add_argument("--lerobot-dir", default="lerobot_data", help="where the LeRobot datasets go")
     args = p.parse_args()
@@ -88,7 +90,7 @@ def main():
         raise SystemExit(f"--seed must stay well below the evaluation seeds ({EVAL_SEED})")
 
     kw = dict(episodes=args.episodes, namespace=args.namespace, cameras=args.cameras,
-              image_size=tuple(args.image_size), num_envs=args.num_envs, seed=args.seed, overwrite=args.overwrite,
+              image_size=tuple(args.image_size), num_envs=args.num_envs, action=args.action, seed=args.seed, overwrite=args.overwrite,
               hdf5_dir=args.hdf5_dir, lerobot_dir=args.lerobot_dir)
     from tqdm import tqdm
 

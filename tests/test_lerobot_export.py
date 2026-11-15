@@ -29,6 +29,7 @@ def test_convert_to_lerobot(tmp_path):
     assert item["observation.images.wrist"].shape == (3, 64, 64)
     assert item["task"].startswith("insert the card into the")
     np.testing.assert_allclose(item["action"].numpy(), item["action.joint_pos"].numpy())
+    assert item["action.delta_ee_pose"].shape == (7,)
     targets = {int(ds[i]["cond.target"]) for i in (0, ds.num_frames - 1)}
     assert targets == {0, 1}
     mask = item["observation.images.target_mask"]
@@ -54,11 +55,17 @@ def test_convert_dagger_rounds(tmp_path):
                  only_success=False, progress=None)
     ds = LeRobotDataset("local/dagger", root=tmp_path / "lr")
     item = ds[3]
-    for key in ("dagger.actor", "dagger.intervention", "expert.joint_pos", "expert.ee_pose"):
+    for key in ("dagger.actor", "dagger.intervention", "expert.joint_pos", "expert.ee_pose", "expert.delta_ee_pose"):
         assert key in item
     np.testing.assert_allclose(item["action"].numpy(), item["expert.joint_pos"].numpy())
     actors = {int(ds[i]["dagger.actor"]) for i in range(ds.num_frames)}
     assert actors == {0, 2}
+
+    ds = convert(files, "local/dagger_delta", tmp_path / "lr_delta", cameras=(), mask_camera=None,
+                 action="delta_ee_pose", only_success=False, progress=None)
+    item = LeRobotDataset("local/dagger_delta", root=tmp_path / "lr_delta")[3]
+    assert item["action"].shape == (7,)
+    np.testing.assert_allclose(item["action"].numpy(), item["action.delta_ee_pose"].numpy())
 
     with pytest.raises(ValueError, match="expert labels"):  # plain demos have no expert labels
         h5 = tmp_path / "plain.hdf5"

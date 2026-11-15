@@ -9,6 +9,8 @@ File layout (robomimic-style)::
         actions                   (T, A)   action sent to the env (in its action_mode)
         commands/joint_pos        (T, 7)   the same command as IK joint targets
         commands/ee_pose          (T, 7)   ... as an end-effector pose (xyz + wxyz)
+        commands/delta_ee_pose    (T, 6)   ... as a delta_ee_pose action (dxyz + world-frame rotation
+                                           vector about the gripper tip; replays the command exactly)
         commands/gripper          (T,)     ... gripper closure in [0, 1]
         rewards, success, dones   (T,)
         <extra>                   (T, ...) optional per-step arrays, e.g. DAgger's ``actor``,
@@ -34,7 +36,7 @@ STATE_FIELDS = ("qpos", "qvel", "ctrl", "mocap_pos", "mocap_quat")
 class EpisodeBuffer:
     obs: dict[str, list] = field(default_factory=dict)
     actions: list = field(default_factory=list)
-    commands: dict[str, list] = field(default_factory=lambda: {"joint_pos": [], "ee_pose": [], "gripper": []})
+    commands: dict[str, list] = field(default_factory=lambda: {"joint_pos": [], "ee_pose": [], "delta_ee_pose": [], "gripper": []})
     states: dict[str, list] = field(default_factory=lambda: {f: [] for f in STATE_FIELDS})
     rewards: list = field(default_factory=list)
     success: list = field(default_factory=list)

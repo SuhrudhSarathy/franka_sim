@@ -107,6 +107,7 @@ class FrankaEnv:
         self.last_command = {
             "joint_pos": np.zeros((num_envs, 7)),
             "ee_pose": np.zeros((num_envs, 7)),
+            "delta_ee_pose": np.zeros((num_envs, 6)),
             "gripper": np.zeros(num_envs),
         }
         _, self.home_ee_quat = self.ik.site_pose(self._home_qpos())
@@ -161,6 +162,7 @@ class FrankaEnv:
         obs = self._observe()
         self.last_command["joint_pos"][ids] = qpos[:, self.arm_qadr]
         self.last_command["ee_pose"][ids] = np.concatenate([obs["ee_pos"], obs["ee_quat"]], -1)[ids]
+        self.last_command["delta_ee_pose"][ids] = 0.0
         self.last_command["gripper"][ids] = 0.0
         return obs, self._info()
 
@@ -200,6 +202,9 @@ class FrankaEnv:
         ctrl = np.clip(ctrl, self.ctrl_lo, self.ctrl_hi)
         self.last_command["joint_pos"][:] = ctrl[:, self.arm_act]
         self.last_command["ee_pose"][:] = cmd["ee_pose"]
+        # The same command as a delta about the gripper tip: executed in ``delta_ee_pose`` mode from
+        # this state, it reproduces the joint command exactly (whatever mode produced it).
+        self.last_command["delta_ee_pose"][:] = self.controller.express("delta_ee_pose")
         self.last_command["gripper"][:] = np.clip(grip, 0.0, 1.0)
         return ctrl
 

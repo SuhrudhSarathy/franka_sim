@@ -38,11 +38,16 @@ def expert_labels(env, expert_action: np.ndarray) -> dict[str, np.ndarray]:
     """The expert's ``ee_pose`` actions ``(N, 8)`` as labels in every stored representation."""
     a = np.asarray(expert_action, dtype=np.float64)
     quat = a[:, 3:7] / np.linalg.norm(a[:, 3:7], axis=1, keepdims=True)
+    grip = np.clip(a[:, 7], 0.0, 1.0)
+    # One IK preview, restated in every representation (same as ``env.convert_action``).
+    q_meas = env.sim.read("qpos")[:, env.arm_qadr]
+    last = env.controller.preview("ee_pose", a[:, :7], q_meas)["last"]
     return {
-        "expert/actions": env.convert_action(a, "ee_pose"),
-        "expert/joint_pos": env.convert_action(a, "ee_pose", "joint_pos")[:, :7],
+        "expert/actions": np.concatenate([env.controller.express(env.action_mode, last), grip[:, None]], axis=1),
+        "expert/joint_pos": env.controller.express("joint_pos", last),
         "expert/ee_pose": np.concatenate([a[:, :3], quat], axis=1),
-        "expert/gripper": np.clip(a[:, 7], 0.0, 1.0),
+        "expert/delta_ee_pose": env.controller.express("delta_ee_pose", last),
+        "expert/gripper": grip,
     }
 
 

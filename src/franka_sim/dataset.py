@@ -21,7 +21,8 @@ class BCDataset:
     Args:
         path: HDF5 file written by ``DemoWriter``.
         obs_keys: observation keys to include (default: all). Images stay uint8 ``(T, H, W, 3)``.
-        action_key: ``"actions"`` (the env action), or ``"commands/joint_pos"`` / ``"commands/ee_pose"``
+        action_key: ``"actions"`` (the env action), or ``"commands/joint_pos"`` / ``"commands/ee_pose"`` /
+            ``"commands/delta_ee_pose"``
             to train on another action representation (the gripper is appended as the last dim).
         obs_horizon / action_horizon: window lengths.
         cond_keys: conditioning variables to include under ``cond/<key>`` (default: all).

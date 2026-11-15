@@ -368,10 +368,16 @@ with DemoWriter("data/hammer.hdf5", env) as writer:
 
 The HDF5 layout is robomimic-style, with one `data/demo_<k>` group per episode. Each group holds
 the observations (images are gzipped uint8), `actions`, the same command as `commands/joint_pos`,
-`commands/ee_pose` and `commands/gripper`, plus `rewards`, `success` and `dones`. It also stores the
+`commands/ee_pose`, `commands/delta_ee_pose` and `commands/gripper`, plus `rewards`, `success` and `dones`. It also stores the
 full simulator `states` (for exact replay), and `cond/<key>` with the episode's conditioning
 (e.g. `cond/target`). The language instruction and reset options are stored as attributes. See
 `franka_sim/recording.py` for details.
+
+The experts plan in `ee_pose`, but every recorded command is also restated as a `delta_ee_pose`
+action (`env.last_command["delta_ee_pose"]`, via `ArmController.express`). Executed in a
+`delta_ee_pose` env from the recorded state, it reproduces the same joint command, so a policy can
+learn to predict deltas from the expert demos directly. Each delta is relative to the previously
+*requested* pose, which is the env's `delta_ee_pose` convention, not the measured one.
 
 ### Training data
 
@@ -410,11 +416,11 @@ uv run --extra lerobot python scripts/to_lerobot.py --push --repo-id <hf-user>/f
 | `observation.environment_state` | task-specific | privileged object state; names in `meta/info.json` |
 | `observation.images.{front,wrist}` | 256×256×3 video | re-rendered from the recorded simulator states |
 | `observation.images.target_mask` | 256×256×3 PNG | binary mask (0/255) of the target entity from the top camera; single-target tasks only |
-| `action` | 8 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper); with `--labels expert`, the scripted expert's labels |
-| `action.joint_pos`, `action.ee_pose` | 8 | both representations of what was executed |
+| `action` | 8 / 7 | joint position targets + gripper closure (`--action ee_pose` for xyz+quat+gripper, `--action delta_ee_pose` for dxyz + rotation vector + gripper); with `--labels expert`, the scripted expert's labels |
+| `action.joint_pos`, `action.ee_pose`, `action.delta_ee_pose` | 8, 8, 7 | every representation of what was executed (`delta_ee_pose` only in recordings that have it) |
 | `dagger.actor` | 1 | DAgger files only: who acted, 0 learner / 1 human / 2 scripted expert (plain demos in the same dataset count as 2) |
 | `dagger.intervention` | 1 | DAgger files only: a human was in control (mask the loss with it for HG-DAgger) |
-| `expert.joint_pos`, `expert.ee_pose` | 8 | the scripted expert's labels, when every file has them (`dagger.py auto`, or `teleop` without `--no-scripted-labels`) |
+| `expert.joint_pos`, `expert.ee_pose`, `expert.delta_ee_pose` | 8, 8, 7 | the scripted expert's labels, when every file has them (`dagger.py auto`, or `teleop` without `--no-scripted-labels`) |
 | `cond.*` | | episode conditioning: `cond.target` (single variants: nail / button / peg / gear / part / connector index) or `cond.order` (long variants: the order the expert followed) |
 | `next.reward`, `next.success`, `next.done` | 1 | |
 | `task` | string | language instruction, e.g. "pick up the hammer and hit the leftmost nail" |

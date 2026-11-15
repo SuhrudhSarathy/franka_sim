@@ -24,7 +24,7 @@ def main():
     p.add_argument("--root", required=True, help="local output directory of the LeRobot dataset")
     p.add_argument("--cameras", nargs="*", default=["front", "wrist"])
     p.add_argument("--image-size", nargs=2, type=int, default=[256, 256], metavar=("H", "W"))
-    p.add_argument("--action", default="joint_pos", choices=["joint_pos", "ee_pose"])
+    p.add_argument("--action", default="joint_pos", choices=["joint_pos", "ee_pose", "delta_ee_pose"])
     p.add_argument("--labels", default="executed", choices=["executed", "expert"],
                    help="action = what was executed, or the scripted expert's labels (DAgger files)")
     p.add_argument("--mask-camera", default="top",
