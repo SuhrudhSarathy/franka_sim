@@ -49,6 +49,7 @@ def main():
     p.add_argument("--noise", type=float, default=0.002, help="action noise std-dev (m) for demo diversity")
     p.add_argument("--keep-failures", action="store_true")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--verbose", action="store_true", help="also print a line per episode")
     p.add_argument("--out", default=None, help="output .hdf5 (default: data/<task>.hdf5)")
     args = p.parse_args()
 
@@ -73,13 +74,16 @@ def main():
     t0 = time.time()
 
     def report(k, ep, ok):
+        from tqdm import tqdm
+
         cond = {k: v.tolist() for k, v in ep.cond.items()}
-        print(f"episode {k:4d}  {'success' if ok else 'FAILED '}  steps={len(ep):4d}  cond={cond}  "
+        tqdm.write(f"episode {k:4d}  {'success' if ok else 'FAILED '}  steps={len(ep):4d}  cond={cond}  "
               f"'{ep.instruction}'")
 
     with DemoWriter(out, env, task_kwargs=task_kwargs, backend=args.backend, seed=args.seed) as writer:
         stats = collect_demos(env, policy, args.episodes, writer, conditions=conditions,
-                              keep_failures=args.keep_failures, on_episode=report, seed=args.seed)
+                              keep_failures=args.keep_failures, on_episode=report if args.verbose else None,
+                              seed=args.seed, progress={"desc": args.task})
     env.close()
     print(f"\nsaved {stats.saved} episodes ({sum(stats.lengths)} steps) to {out} in {time.time() - t0:.1f}s; "
           f"scripted success rate {stats.success_rate:.0%} ({stats.succeeded}/{stats.attempted})")

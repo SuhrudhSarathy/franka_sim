@@ -33,6 +33,7 @@ def main():
     p.add_argument("--include-failures", action="store_true")
     p.add_argument("--push", action="store_true", help="upload an existing dataset at --root to the Hub")
     p.add_argument("--private", action="store_true")
+    p.add_argument("--verbose", action="store_true", help="also print a line per converted episode")
     args = p.parse_args()
 
     if args.push:
@@ -46,7 +47,8 @@ def main():
     t0 = time.time()
     ds = convert(args.hdf5, args.repo_id, args.root, cameras=args.cameras, image_size=tuple(args.image_size),
                  action=args.action, labels=args.labels, use_videos=not args.images, only_success=not args.include_failures,
-                 mask_camera=None if args.mask_camera.lower() == "none" else args.mask_camera)
+                 mask_camera=None if args.mask_camera.lower() == "none" else args.mask_camera,
+                 progress=print if args.verbose else None, bar=True)
     print(f"\nwrote {ds.num_episodes} episodes / {ds.num_frames} frames to {args.root} in {time.time() - t0:.0f}s")
 
 

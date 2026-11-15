@@ -694,6 +694,7 @@ dependencies = [
     { name = "mink" },
     { name = "mujoco" },
     { name = "numpy" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -736,6 +737,7 @@ requires-dist = [
     { name = "mujoco-warp", marker = "extra == 'warp'", specifier = ">=4.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pygame-ce", marker = "extra == 'teleop'", specifier = ">=2.5" },
+    { name = "tqdm", specifier = ">=4.66" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
     { name = "websockets", marker = "extra == 'server'", specifier = ">=13" },
 ]

@@ -31,7 +31,10 @@ Per frame the dataset holds:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -40,7 +43,7 @@ import numpy as np
 
 import franka_sim
 from franka_sim.masks import render_mask, target_geoms
-from franka_sim.recording import dataset_info, iter_episodes
+from franka_sim.recording import _progress_bar, dataset_info, iter_episodes
 
 MASK_KEY = "observation.images.target_mask"
 
@@ -130,11 +133,44 @@ class _Renderer:
         self.env.close()
 
 
+@contextlib.contextmanager
+def _muted_native_stderr(active: bool = True):
+    """Send file descriptor 2 (where C libraries log) to /dev/null inside the block."""
+    if not active:
+        yield
+        return
+    sys.stderr.flush()
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(saved)
+        os.close(devnull)
+
+
+def _count(paths: Sequence[Path], only_success: bool) -> tuple[int, int]:
+    """(episodes, frames) that ``convert`` will write, read from the episode attributes only."""
+    import h5py
+
+    eps = frames = 0
+    for path in paths:
+        with h5py.File(path, "r") as f:
+            for g in f["data"].values():
+                if g.attrs["success"] or not only_success:
+                    eps += 1
+                    frames += int(g.attrs["num_samples"])
+    return eps, frames
+
+
 def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
             cameras: Sequence[str] = ("front", "wrist"), image_size: tuple[int, int] = (256, 256),
             action: str = "joint_pos", labels: str = "executed", use_videos: bool = True, only_success: bool = True,
             mask_camera: str | None = "top", encoder_preset: int | None = 10,
-            progress: Callable[[str], None] | None = print):
+            progress: Callable[[str], None] | None = print, bar: bool | dict = False):
     """Write every (successful) episode of ``hdf5_paths`` into a new LeRobot dataset at ``root``.
 
     All files must come from the same task configuration (same observation layout). Returns the
@@ -143,6 +179,9 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
     ``labels``: ``"executed"`` (``action`` = what was executed: the expert's commands in demos, the
     operator's on intervention steps, the learner's own elsewhere) or ``"expert"`` (``action`` = the
     scripted expert's label on every frame; needs DAgger files recorded with expert labels).
+
+    ``progress`` gets one line per finished episode; ``bar`` shows a tqdm bar over frames instead
+    (a dict: extra ``tqdm`` arguments such as ``desc`` / ``position``).
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -189,6 +228,17 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
     ds = LeRobotDataset.create(repo_id=repo_id, fps=fps, features=features, root=root, robot_type="franka_panda",
                                use_videos=use_videos, image_writer_threads=4, **kwargs)
     n_eps = 0
+    total_eps, total_frames = _count(paths, only_success)
+    # The video encoders (SVT-AV1, libav) print a dozen lines per video straight to the C-level
+    # stderr, which buries the bar: draw it on a copy of stderr and mute fd 2 while encoding.
+    bar_stream = os.fdopen(os.dup(2), "w") if bar else None
+    if bar_stream is not None:
+        bar = {"file": bar_stream, **(bar if isinstance(bar, dict) else {})}
+    pbar = _progress_bar(bar, total=total_frames, unit="frame", desc="converting")
+    if pbar is not None:
+        pbar.set_postfix(episodes=f"0/{total_eps}", refresh=False)
+        if progress is print:
+            progress = pbar.write  # episode lines above the bar, not through it
     try:
         for path in paths:
             for ep in iter_episodes(path, only_success=only_success):
@@ -241,12 +291,22 @@ def convert(hdf5_paths: Sequence[str | Path], repo_id: str, root: str | Path, *,
                         for key, img in renderer.render(ep["states"], t, cameras, mask).items():
                             frame[key if key == MASK_KEY else f"observation.images.{key}"] = img
                     ds.add_frame(frame)
-                ds.save_episode(parallel_encoding=False)  # a process pool per episode costs seconds
+                    if pbar is not None:
+                        pbar.update(1)
+                with _muted_native_stderr(pbar is not None):
+                    ds.save_episode(parallel_encoding=False)  # a process pool per episode costs seconds
                 n_eps += 1
+                if pbar is not None:
+                    pbar.set_postfix(episodes=f"{n_eps}/{total_eps}")
                 if progress:
                     progress(f"  episode {n_eps}: {T} frames  '{instruction}'")
     finally:
+        if pbar is not None:
+            pbar.close()
+        if bar_stream is not None:
+            bar_stream.close()
         if renderer is not None:
             renderer.close()
-    ds.finalize()
+    with _muted_native_stderr(bar_stream is not None):
+        ds.finalize()
     return ds

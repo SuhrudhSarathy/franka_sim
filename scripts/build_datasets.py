@@ -15,7 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from franka_sim.benchmark import EVAL_SEED, SUITE
@@ -27,13 +28,8 @@ DATASETS = {name: (name, {}, n or None) for name, (_kind, n) in SUITE.items()}
 
 def build(name: str, episodes: int, namespace: str, cameras: list[str], image_size: tuple[int, int],
           num_envs: int, seed: int, overwrite: bool, hdf5_dir: str = "data",
-          lerobot_dir: str = "lerobot_data") -> dict:
+          lerobot_dir: str = "lerobot_data", slots=None) -> dict:
     import shutil
-
-    import franka_sim
-    from franka_sim.lerobot_export import convert
-    from franka_sim.policies import make_policy
-    from franka_sim.recording import DemoWriter, collect_demos
 
     task, task_kwargs, balanced = DATASETS[name]
     h5 = Path(hdf5_dir) / f"{name}.hdf5"
@@ -42,16 +38,33 @@ def build(name: str, episodes: int, namespace: str, cameras: list[str], image_si
     if overwrite:
         h5.unlink(missing_ok=True)
         shutil.rmtree(root, ignore_errors=True)
+    slot = slots.get() if slots is not None else 0  # a terminal line for this job's progress bars
+    try:
+        return _build(name, task, task_kwargs, balanced, h5, root, episodes, namespace, cameras, image_size,
+                      num_envs, seed, slot)
+    finally:
+        if slots is not None:
+            slots.put(slot)
+
+
+def _build(name, task, task_kwargs, balanced, h5, root, episodes, namespace, cameras, image_size, num_envs,
+           seed, slot) -> dict:
+    import franka_sim
+    from franka_sim.lerobot_export import convert
+    from franka_sim.policies import make_policy
+    from franka_sim.recording import DemoWriter, collect_demos
+
     t0 = time.time()
     env = franka_sim.make(task, num_envs=num_envs, action_mode="ee_pose", seed=seed, task_kwargs=task_kwargs)
     policy = make_policy(env, noise=0.002, seed=seed)
     conditions = (lambda k: {"target": k % balanced}) if balanced else None
     with DemoWriter(h5, env, task_kwargs=task_kwargs, seed=seed) as w:
-        stats = collect_demos(env, policy, episodes, w, conditions=conditions, seed=seed)
+        stats = collect_demos(env, policy, episodes, w, conditions=conditions, seed=seed,
+                              progress={"desc": f"{name}: record", "position": slot, "leave": False})
     env.close()
     t1 = time.time()
     ds = convert([h5], f"{namespace}/franka_sim_{name}", root, cameras=cameras, image_size=image_size,
-                 progress=None)
+                 progress=None, bar={"desc": f"{name}: convert", "position": slot, "leave": False})
     return {"name": name, "episodes": ds.num_episodes, "frames": ds.num_frames,
             "scripted_success": f"{stats.succeeded}/{stats.attempted}",
             "record_s": round(t1 - t0), "convert_s": round(time.time() - t1), "root": str(root)}
@@ -77,13 +90,19 @@ def main():
     kw = dict(episodes=args.episodes, namespace=args.namespace, cameras=args.cameras,
               image_size=tuple(args.image_size), num_envs=args.num_envs, seed=args.seed, overwrite=args.overwrite,
               hdf5_dir=args.hdf5_dir, lerobot_dir=args.lerobot_dir)
-    with ProcessPoolExecutor(args.jobs) as pool:
-        futures = {name: pool.submit(build, name, **kw) for name in args.tasks}
+    from tqdm import tqdm
+
+    jobs = max(1, min(args.jobs, len(args.tasks)))
+    with multiprocessing.Manager() as manager, ProcessPoolExecutor(jobs) as pool:
+        slots = manager.Queue()  # one terminal line per worker, for its progress bars
+        for k in range(jobs):
+            slots.put(k)
+        futures = {pool.submit(build, name, slots=slots, **kw): name for name in args.tasks}
         results = []
-        for name, fut in futures.items():
+        for fut in as_completed(futures):
             res = fut.result()
             results.append(res)
-            print(json.dumps(res), flush=True)
+            tqdm.write(json.dumps(res))
     summary_path = Path(args.lerobot_dir) / "summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary = {r["name"]: r for r in json.loads(summary_path.read_text())} if summary_path.exists() else {}

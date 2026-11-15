@@ -239,6 +239,12 @@ Scripts (`scripts/`):
     deletes the parent's shared memory when it exits.
   - Set `FRANKA_SIM_CONSOLE_SNAPSHOT=out.png` to save one frame of the console. macOS denies
     `screencapture` to agents.
+- **Progress bars:** `collect_demos(progress=...)` and `convert(bar=...)` draw tqdm bars;
+  `build_datasets.py` gives each worker its own terminal line (a slot queue). SVT-AV1 and libav print
+  about 15 lines per video straight to the C-level stderr, and `av.logging.set_level` does not stop
+  them (LeRobot resets it). `convert` therefore mutes fd 2 around `save_episode`/`finalize` while a bar
+  is shown, and draws the bar on a duplicate of stderr. When stderr is not a TTY (`nohup`, log
+  files), bars refresh once a minute.
 - **Recording:** `collect_demos` keeps the reset info and the step info separate. Mixing them once
   overwrote `cond_*`.
 

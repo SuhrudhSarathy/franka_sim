@@ -150,7 +150,7 @@ def collect_demos(env, policy, num_episodes: int, writer: DemoWriter | None = No
                   conditions: Callable[[int], dict] | list[dict] | None = None, keep_failures: bool = False,
                   post_success_steps: int = 10, max_attempts: int | None = None,
                   on_episode: Callable[[int, EpisodeBuffer, bool], None] | None = None,
-                  seed: int | None = None) -> CollectStats:
+                  seed: int | None = None, progress: bool | dict = False) -> CollectStats:
     """Roll out ``policy`` in every env of ``env`` until ``num_episodes`` episodes are saved.
 
     Args:
@@ -161,6 +161,8 @@ def collect_demos(env, policy, num_episodes: int, writer: DemoWriter | None = No
         post_success_steps: keep recording this many steps after success (the "settle" phase).
         max_attempts: stop after this many attempted episodes (default ``4 * num_episodes``).
         on_episode: callback ``(episode_number, buffer, success)`` after each finished episode.
+        progress: show a tqdm bar of saved episodes (a dict: extra ``tqdm`` arguments, e.g. ``desc``,
+            ``position``).
     """
     n = env.num_envs
     stats = CollectStats()
@@ -190,6 +192,7 @@ def collect_demos(env, policy, num_episodes: int, writer: DemoWriter | None = No
     for i in range(n):
         obs, info = start(i, obs, info)
 
+    bar = _progress_bar(progress, total=num_episodes, unit="ep", desc="recording")
     while stats.saved < num_episodes and stats.attempted < max_attempts:
         states = {f: env.sim.read(f) for f in STATE_FIELDS}
         action = policy.act(obs)
@@ -226,13 +229,33 @@ def collect_demos(env, policy, num_episodes: int, writer: DemoWriter | None = No
                 if writer is not None:
                     writer.write(ep, ok, env_id=i)
                 stats.saved += 1
+                if bar is not None:
+                    bar.update(1)
+            if bar is not None:
+                bar.set_postfix(success=f"{stats.succeeded}/{stats.attempted}", refresh=False)
             if on_episode is not None:
                 on_episode(stats.attempted, ep, ok)
             buffers[i] = None
             if stats.saved + sum(b is not None for b in buffers) < num_episodes:
                 obs, reset_info = env.reset(env_ids=[i])
                 obs, _ = start(i, obs, reset_info)
+    if bar is not None:
+        bar.close()
     return stats
+
+
+def _progress_bar(progress: bool | dict, **defaults):
+    """A tqdm bar (or ``None`` when ``progress`` is falsy). Logs to a file update once a minute."""
+    if not progress:
+        return None
+    import sys
+
+    from tqdm import tqdm
+
+    kw = {"dynamic_ncols": True, "smoothing": 0.05, **defaults, **(progress if isinstance(progress, dict) else {})}
+    if not sys.stderr.isatty():
+        kw.setdefault("mininterval", 60.0)
+    return tqdm(**kw)
 
 
 # ------------------------------------------------------------------------------------------------

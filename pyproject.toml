@@ -13,6 +13,7 @@ dependencies = [
     "mink>=1.4.0",
     "mujoco>=4.0",
     "numpy>=1.26",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
