@@ -147,8 +147,8 @@ def main() -> None:
     t.add_argument("--console-cameras", nargs="*", default=["back", "wrist"])
     t.add_argument("--console-size", nargs=2, type=int, default=[300, 400])
     t.add_argument("--speed", type=float, default=0.15, help="teleop speed at full key press (m/s)")
-    t.add_argument("--frame", choices=["wrist", "world"], default="wrist",
-                   help="key directions: relative to the wrist camera / gripper (default) or the world")
+    t.add_argument("--frame", choices=["world", "heading"], default="world",
+                   help="initial key frame: fixed world axes, or turning with the gripper's yaw (M switches)")
     t.add_argument("--realtime-factor", type=float, default=1.0, help="<1 slows the clock (slow policies)")
     t.add_argument("--no-auto-takeover", action="store_true", help="only Tab takes control")
     t.add_argument("--no-scripted-labels", action="store_true", help="do not record scripted expert labels")

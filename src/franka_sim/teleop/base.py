@@ -5,15 +5,15 @@ motion as 6 values in ``[-1, 1]`` in an *operator frame* (forward, left, up, the
 plus discrete *events* since the last poll. ``TeleopSession`` maps the twist to the world with
 ``twist_to_world`` and scales it by the current speed into ``delta_ee_pose`` commands.
 
-Operator frames (``TELEOP_FRAMES``):
+Operator frames (``TELEOP_FRAMES``). Every motion pivots at the gripper tip (``gripper`` site):
 
-``wrist`` (default)  follows the gripper, as seen in the ``wrist`` camera. Forward is the gripper's
-                     approach axis (into the camera image), left/up are image left/up. Rotations:
-                     ``wz`` spins the gripper about its approach axis, ``wy`` tilts the view up,
-                     ``wx`` turns it right. The frame moves with the *commanded* gripper pose.
-``world``            fixed: forward +x (away from the base), left +y, up +z; ``wx wy wz`` are roll,
-                     pitch, yaw about those axes. Optionally a device also shows the operator what the
-robot sees (``show``).
+``world`` (default)  ``vx vy vz``: world +x (away from the base), +y (robot's left), +z (up).
+``heading``          ``vz`` is world up, but forward/left turn with the gripper's yaw (forward is
+                     the gripper's x axis projected onto the floor).
+
+In both, ``wz`` spins the gripper about its own approach axis (the axis the wrist camera looks
+along; with the gripper pointing down this is a yaw), and ``wx`` / ``wy`` roll / pitch about the
+frame's forward / left axes. Frames use the *commanded* gripper orientation.
 
 Events (strings):
 
@@ -24,6 +24,7 @@ Events (strings):
 ``save``    end the episode now and save it
 ``discard`` drop the episode and start a new one
 ``quit``    stop the session (the current episode is dropped)
+``frame``   switch to the next operator frame
 ``faster``  / ``slower``: scale the teleop speed
 ========== =====================================================================================
 """
@@ -34,32 +35,37 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-EVENTS = ("toggle", "grip", "pause", "save", "discard", "quit", "faster", "slower")
-TELEOP_FRAMES = ("wrist", "world")
-
-# Wrist frame in the end-effector (``gripper`` site) frame, whose +z is the approach axis. The wrist
-# camera sits behind the hand looking along the approach axis: image right is exactly the site's -y,
-# image up is mostly the site's -x (the camera is tilted ~33 deg; we snap to the gripper's axes so
-# "forward" is a clean approach motion). Columns: forward, left, up.
-_WRIST_TRANSLATION = np.column_stack([(0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)])
-# Rotation axes for (wx, wy, wz): about -up (turn right), -left (tilt up), -forward (spin; with the
-# gripper pointing down this is world yaw, as in the world frame).
-_WRIST_ROTATION = np.column_stack([(1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)])
+EVENTS = ("toggle", "grip", "pause", "save", "discard", "quit", "faster", "slower", "frame")
+TELEOP_FRAMES = ("world", "heading")
 
 
-def twist_to_world(twist: np.ndarray, frame: str, ee_quat: np.ndarray | None = None) -> np.ndarray:
-    """Map an operator-frame twist (6,) to the world frame; ``ee_quat`` (wxyz) is needed for ``wrist``."""
-    twist = np.asarray(twist, dtype=float)
-    if frame == "world":
-        return twist.copy()
-    if frame != "wrist":
-        raise ValueError(f"unknown teleop frame {frame!r}; expected one of {TELEOP_FRAMES}")
+def _quat_to_mat(q) -> np.ndarray:
     import mujoco
 
-    rot = np.empty(9)
-    mujoco.mju_quat2Mat(rot, np.asarray(ee_quat, dtype=np.float64))
-    rot = rot.reshape(3, 3)
-    return np.concatenate([rot @ _WRIST_TRANSLATION @ twist[:3], rot @ _WRIST_ROTATION @ twist[3:]])
+    out = np.empty(9)
+    mujoco.mju_quat2Mat(out, np.asarray(q, dtype=np.float64))
+    return out.reshape(3, 3)
+
+
+def frame_axes(frame: str, ee_quat) -> np.ndarray:
+    """Operator frame axes (columns: forward, left, up) in the world, for the gripper at ``ee_quat``."""
+    if frame == "world":
+        return np.eye(3)
+    if frame != "heading":
+        raise ValueError(f"unknown teleop frame {frame!r}; expected one of {TELEOP_FRAMES}")
+    x = _quat_to_mat(ee_quat)[:, 0]  # the gripper's x axis: horizontal while it points down
+    yaw = np.arctan2(x[1], x[0]) if np.hypot(x[0], x[1]) > 1e-3 else 0.0
+    c, s = np.cos(yaw), np.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def twist_to_world(twist, frame: str, ee_quat) -> np.ndarray:
+    """Map an operator-frame twist (6,) to a world-frame one (linear, then rotation vector)."""
+    twist = np.asarray(twist, dtype=float)
+    axes = frame_axes(frame, ee_quat)
+    spin = -_quat_to_mat(ee_quat)[:, 2]  # about the approach axis, signed like world yaw when pointing down
+    rot = axes[:, 0] * twist[3] + axes[:, 1] * twist[4] + spin * twist[5]
+    return np.concatenate([axes @ twist[:3], rot])
 
 
 @dataclass

@@ -182,18 +182,19 @@ uv run --extra teleop python scripts/dagger.py teleop --task kitting --episodes 
 ```
 
 The teleop console is a small window showing the `back` and `wrist` cameras, who is in control, the
-instruction and the progress. Click it to drive. By default the keys move the gripper relative to
-the `wrist` camera, so a key always moves the gripper the same way in that image whatever the arm's
-pose. The frame follows the commanded gripper orientation: forward is the gripper's approach axis,
-and left and up are left and up in the wrist image. `--frame world` switches to fixed world axes.
+instruction and the progress. Click it to drive. Every motion pivots at the gripper tip. Two key
+frames, switched with `M` (start with `--frame world|heading`):
+- **world** (default): W/S, A/D and R/F move along the fixed world axes.
+- **heading**: R/F is still world up/down, but forward/left turn with the gripper's yaw, so after a
+  spin W still moves the gripper the same way relative to itself.
 
 | keys | |
 |---|---|
-| `W`/`S` | wrist: in / out along the gripper (down, when it points down). world: ±x (away from / toward the base) |
-| `A`/`D` | wrist: image left / right. world: ±y (robot's left / right) |
-| `R`/`F` | wrist: image up / down. world: ±z |
-| `Q`/`E` | wrist: spin about the gripper axis. world: yaw (the same motion while the gripper points down) |
-| `I`/`K`, `J`/`L` | wrist: tilt the view up / down, turn it left / right. world: pitch, roll |
+| `W`/`S`, `A`/`D` | world: ±x (away from / toward the base), ±y (robot's left / right). heading: forward/back, left/right of the gripper |
+| `R`/`F` | up / down (world z, in both frames) |
+| `Q`/`E` | spin the gripper about its own axis (the axis the wrist camera looks along) |
+| `I`/`K`, `J`/`L` | pitch, roll about the frame's left and forward axes |
+| `M` | switch frame (world / heading) |
 | `Shift` (held) | precision mode (1/4 speed) |
 | `[` / `]` | slower / faster (default 0.15 m/s) |
 | `Space` | toggle the gripper |

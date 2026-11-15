@@ -160,36 +160,38 @@ def test_remote_policy_round_trip():
         thread.join(timeout=5)
 
 
-def test_wrist_frame_matches_the_wrist_camera():
+
+def test_teleop_frames_world_heading_and_spin():
     import mujoco
 
     from franka_sim.teleop.base import twist_to_world
 
     env = franka_sim.make("peg_insertion")
-    for seed in range(3):  # different start poses (yaw offsets)
+    sid = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_SITE, "gripper")
+    for seed in range(3):  # different start yaws
         env.reset(seed=seed)
-        m, d = env.model, env.sim.mjdata(0)
-        cam = d.cam_xmat[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, "wrist")].reshape(3, 3)
-        site = d.site_xmat[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "gripper")].reshape(3, 3)
+        site = env.sim.mjdata(0).site_xmat[sid].reshape(3, 3)
         quat = env.last_command["ee_pose"][0, 3:7]
-        fwd, left, up = (twist_to_world(np.eye(6)[k], "wrist", quat)[:3] for k in range(3))
-        np.testing.assert_allclose(-left, cam[:, 0], atol=0.05)  # D moves toward image right
-        assert up @ cam[:, 1] > 0.8 and fwd @ -cam[:, 2] > 0.8  # R: image up; W: into the image
-        np.testing.assert_allclose(fwd, site[:, 2], atol=0.05)  # W/S: along the approach axis
-        assert fwd[2] < -0.9  # the gripper starts pointing down, so W moves it down
-        spin = twist_to_world(np.eye(6)[5], "wrist", quat)[3:]
-        np.testing.assert_allclose(spin, -site[:, 2], atol=0.05)  # Q/E: spin about the approach axis
-        np.testing.assert_allclose(twist_to_world(np.eye(6)[5], "world")[3:], [0, 0, 1])
+        e = np.eye(6)
+        for k in range(3):  # world: fixed axes, whatever the gripper's yaw
+            np.testing.assert_allclose(twist_to_world(e[k], "world", quat)[:3], np.eye(3)[k], atol=1e-12)
+        fwd = twist_to_world(e[0], "heading", quat)[:3]
+        heading = site[:2, 0] / np.linalg.norm(site[:2, 0])
+        np.testing.assert_allclose(fwd, [*heading, 0.0], atol=1e-3)  # heading: the gripper's x, on the floor
+        np.testing.assert_allclose(twist_to_world(e[2], "heading", quat)[:3], [0, 0, 1], atol=1e-12)
+        for frame in ("world", "heading"):  # Q/E spins about the approach axis (a yaw while pointing down)
+            spin = twist_to_world(e[5], frame, quat)[3:]
+            np.testing.assert_allclose(spin, -site[:, 2], atol=0.05)
+            assert spin[2] > 0.99
     env.close()
 
 
-def test_teleop_session_wrist_frame_forward_moves_along_the_approach(tmp_path):
+def test_frame_event_switches_the_teleop_frame(tmp_path):
     env = franka_sim.make("reach", action_mode="ee_pose")
-    device = ScriptedDevice([TeleopInput(twist=np.array([1.0, 0, 0, 0, 0, 0]))] * 8
-                            + [TeleopInput(events=["save"])])
-    with DemoWriter(tmp_path / "t.hdf5", env) as w:
-        TeleopSession(env, device, None, w, realtime_factor=0, console_size=(48, 64)).run(1)
-    ee = load_episode(tmp_path / "t.hdf5", 0)["commands"]["ee_pose"]
-    d = ee[-1, :3] - ee[0, :3]
-    assert d[2] < -0.02 and np.linalg.norm(d[:2]) < 0.01  # W: down toward the table, not +x
+    fwd = TeleopInput(twist=np.array([1.0, 0, 0, 0, 0, 0]))
+    device = ScriptedDevice([fwd] * 3 + [TeleopInput(events=["frame"])] + [TeleopInput(events=["save"])])
+    session = TeleopSession(env, device, None, None, realtime_factor=0, console_size=(48, 64))
+    assert session.frame == "world"
+    session.run(1)
+    assert session.frame == "heading"
     env.close()

@@ -45,12 +45,12 @@ MOTION_KEYS = {
 }
 EVENT_KEYS = {
     "space": "grip", "tab": "toggle", "return": "toggle", "p": "pause", "n": "save",
-    "backspace": "discard", "escape": "quit", "[": "slower", "]": "faster",
+    "backspace": "discard", "escape": "quit", "[": "slower", "]": "faster", "m": "frame",
 }
 # Motion legend per operator frame (``teleop.base``), then the shared line.
 MOTION_LEGEND = {
-    "wrist": "Wrist view: W/S in/out  A/D left/right  R/F up/down  Q/E spin  I/K tilt  J/L turn  Shift fine",
-    "world": "World: W/S fwd/back  A/D left/right  R/F up/down  Q/E yaw  I/K pitch  J/L roll  Shift fine",
+    "world": "WORLD axes: W/S +-x  A/D +-y  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: heading  Shift fine",
+    "heading": "HEADING axes: W/S fwd/back  A/D left/right  R/F up/down  Q/E spin  I/K pitch  J/L roll  M: world",
 }
 LEGEND_TAIL = "Space gripper   Tab take over / hand back   P pause   N save   Backspace discard   [ ] speed   Esc quit"
 
@@ -161,7 +161,7 @@ def _console(shm_name: str, n: int, h: int, w: int, title: str) -> None:
             for line in (hud.get("instruction", ""), hud.get("detail", "")):
                 screen.blit(font.render(line, True, (200, 205, 215)), (12, y))
                 y += 22
-            legend = (MOTION_LEGEND.get(hud.get("frame", "wrist"), MOTION_LEGEND["wrist"]), LEGEND_TAIL)
+            legend = (MOTION_LEGEND.get(hud.get("frame", "world"), MOTION_LEGEND["world"]), LEGEND_TAIL)
             for k, part in enumerate(legend):
                 screen.blit(small.render(part, True, (130, 135, 150)), (12, h + panel_h - 36 + 17 * k))
             if not focused:

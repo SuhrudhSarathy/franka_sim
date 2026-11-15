@@ -158,11 +158,10 @@ Scripts (`scripts/`):
   continues its own plan instead of correcting from where the learner left the robot.
 - Human control is `delta_ee_pose` from the *commanded* pose (bumpless takeover). The gripper is
   taken over from `last_command["gripper"]`.
-- Teleop twists are in an operator frame (`teleop.base.twist_to_world`). The default `wrist` frame
-  is the commanded gripper frame snapped to the wrist camera: forward = approach axis (site +z),
-  left = site +y (image left), up = site -x. The camera itself is tilted about 33°, so we don't use
-  its raw axes. `test_wrist_frame_matches_the_wrist_camera` checks this against the camera; re-check
-  it if you move the wrist camera.
+- Teleop twists are in an operator frame (`teleop.base.twist_to_world`): `world` (fixed axes,
+  default) or `heading` (z up, x/y turned by the gripper's yaw); `M` (the `frame` event) switches.
+  In both, Q/E (`wz`) spins about the gripper's approach axis. The user rejected a wrist-camera frame
+  (the axes were the model's, not intuitive); keep translations world-aligned.
 - DAgger HDF5: `actor` (0 learner / 1 human / 2 expert), `intervention`, and `expert/{actions,
   joint_pos, ee_pose, gripper}`, via `EpisodeBuffer.extras`. The exporter adds `dagger.*` and,
   when all files have them, `expert.*`. DAgger seeds are `20000 + 1000 * round + k`, below

@@ -51,8 +51,8 @@ class TeleopSession:
         console_cameras: cameras streamed to the device's console.
         console_size: ``(height, width)`` of those frames.
         speed: operator translation speed at full deflection (m/s); ``rot_speed`` in rad/s.
-        frame: operator frame of the device's twist, ``"wrist"`` (follows the gripper, as seen in the
-            wrist camera) or ``"world"`` (see ``teleop.base``).
+        frame: initial operator frame of the device's twist, ``"world"`` or ``"heading"`` (see
+            ``teleop.base``); the ``frame`` event (key M) switches between them.
         auto_takeover: any motion input while the learner drives takes control immediately.
         scripted_labels: also record the scripted expert's labels (if the task has one).
         realtime_factor: wall-clock pace (0.5 = half speed, for slow learners; 0 = as fast as possible).
@@ -67,7 +67,7 @@ class TeleopSession:
     def __init__(self, env, device: TeleopDevice, learner=None, writer=None, *, obs_mode: str = "vision",
                  mask_camera: str | None = None, console_cameras=("back", "wrist"),
                  console_size: tuple[int, int] = (300, 400), speed: float = 0.15, rot_speed: float = 1.0,
-                 frame: str = "wrist", auto_takeover: bool = True, scripted_labels: bool = True, realtime_factor: float = 1.0,
+                 frame: str = "world", auto_takeover: bool = True, scripted_labels: bool = True, realtime_factor: float = 1.0,
                  post_success_steps: int = 10, keep_failures: bool = True,
                  conditions: Callable[[int], dict] | list[dict] | None = None, seed: int = 0,
                  viewer: bool = False, on_episode: Callable | None = None):
@@ -178,7 +178,7 @@ class TeleopSession:
                   f"progress {int(info.get('progress', 0))}/{n}  "
                   f"{'SUCCESS' if ep.steps_since_success >= 0 else ''}{'WRONG TARGET' if self.ep_wrong else ''}")
         detail = (f"saved {self.saved} ({self.successes} ok)  discarded {self.discarded}  "
-                  f"interventions {self.interventions}  speed x{self.speed_scale:.2f}  "
+                  f"interventions {self.interventions}  speed x{self.speed_scale:.2f}  frame {self.frame}  "
                   f"gripper {'closed' if self.grip > 0.5 else 'open'}"
                   + (f"  learner {self.learner_ms:.0f} ms" if self.learner is not None else ""))
         self.device.show(frames, {"mode": mode, "status": status, "instruction": ep.instruction,
@@ -223,6 +223,8 @@ class TeleopSession:
                     elif ev == "grip":
                         self._set_control(HUMAN)
                         self.grip = 0.0 if self.grip > 0.5 else 1.0
+                    elif ev == "frame":
+                        self.frame = TELEOP_FRAMES[(TELEOP_FRAMES.index(self.frame) + 1) % len(TELEOP_FRAMES)]
                     elif ev == "faster":
                         self.speed_scale = min(self.speed_scale * 1.25, 4.0)
                     elif ev == "slower":
